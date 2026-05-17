@@ -49,8 +49,9 @@ class ToolHandlers:
         """Get deals for assigned users."""
         client = await self._get_client()
         b24_user_ids = user_context.get("b24_user_ids", [])
+        is_admin = user_context.get("is_admin", False)
 
-        if not b24_user_ids:
+        if not b24_user_ids and not is_admin:
             return {"deals": [], "message": "No assigned users configured"}
 
         deals = await client.get_deals(
@@ -89,7 +90,7 @@ class ToolHandlers:
         client = await self._get_client()
         b24_user_ids = user_context.get("b24_user_ids", [])
 
-        if not b24_user_ids:
+        if not b24_user_ids and not user_context.get("is_admin", False):
             return {"leads": [], "message": "No assigned users configured"}
 
         leads = await client.get_leads(
@@ -117,7 +118,7 @@ class ToolHandlers:
         if not query:
             return {"error": "query is required"}
 
-        if not b24_user_ids:
+        if not b24_user_ids and not user_context.get("is_admin", False):
             return {"results": [], "message": "No assigned users configured"}
 
         contacts = await client.search_contacts(
@@ -139,7 +140,7 @@ class ToolHandlers:
         client = await self._get_client()
         b24_user_ids = user_context.get("b24_user_ids", [])
 
-        if not b24_user_ids:
+        if not b24_user_ids and not user_context.get("is_admin", False):
             return {"summary": {}, "message": "No assigned users configured"}
 
         # Get all deals for the period
@@ -182,7 +183,7 @@ class ToolHandlers:
         client = await self._get_client()
         b24_user_ids = user_context.get("b24_user_ids", [])
 
-        if not b24_user_ids:
+        if not b24_user_ids and not user_context.get("is_admin", False):
             return {"summary": {}, "message": "No assigned users configured"}
 
         date_from = params.get("date_from")
@@ -229,7 +230,7 @@ class ToolHandlers:
         client = await self._get_client()
         b24_user_ids = user_context.get("b24_user_ids", [])
 
-        if not b24_user_ids:
+        if not b24_user_ids and not user_context.get("is_admin", False):
             return {"activities": [], "message": "No assigned users configured"}
 
         days_back = params.get("days_back", 7)

@@ -102,12 +102,12 @@ class Bitrix24Client:
     ) -> List[Dict[str, Any]]:
         """Get deals for assigned users."""
         params = {
-            "filter": {
-                "ASSIGNED_BY_ID": assigned_by_ids
-            },
+            "filter": {},
             "select": ["*", "UF_*"]
         }
 
+        if assigned_by_ids:
+            params["filter"]["ASSIGNED_BY_ID"] = assigned_by_ids
         if filter_by_stage:
             params["filter"]["STAGE_ID"] = filter_by_stage
         if filter_by_date_from:
@@ -132,12 +132,12 @@ class Bitrix24Client:
     ) -> List[Dict[str, Any]]:
         """Get leads for assigned users."""
         params = {
-            "filter": {
-                "ASSIGNED_BY_ID": assigned_by_ids
-            },
+            "filter": {},
             "select": ["*", "UF_*"]
         }
 
+        if assigned_by_ids:
+            params["filter"]["ASSIGNED_BY_ID"] = assigned_by_ids
         if filter_by_status:
             params["filter"]["STATUS_ID"] = filter_by_status
         if filter_by_date_from:
@@ -160,12 +160,12 @@ class Bitrix24Client:
     ) -> List[Dict[str, Any]]:
         """Search contacts by name/phone/email."""
         params = {
-            "filter": {
-                "ASSIGNED_BY_ID": assigned_by_ids,
-                "NAME": query
-            },
+            "filter": {"NAME": query},
             "select": ["*", "PHONE", "EMAIL"]
         }
+
+        if assigned_by_ids:
+            params["filter"]["ASSIGNED_BY_ID"] = assigned_by_ids
 
         return await self._paginate("crm.contact.list", params, limit=limit, max_items=limit)
 
@@ -181,11 +181,12 @@ class Bitrix24Client:
     ) -> List[Dict[str, Any]]:
         """Get companies."""
         params = {
-            "filter": {
-                "ASSIGNED_BY_ID": assigned_by_ids
-            },
+            "filter": {},
             "select": ["*"]
         }
+
+        if assigned_by_ids:
+            params["filter"]["ASSIGNED_BY_ID"] = assigned_by_ids
 
         return await self._paginate("crm.company.list", params, limit=limit, max_items=limit)
 
@@ -199,11 +200,12 @@ class Bitrix24Client:
     ) -> List[Dict[str, Any]]:
         """Get activities (tasks, calls, meetings)."""
         params = {
-            "filter": {
-                "RESPONSIBLE_ID": assigned_by_ids
-            },
+            "filter": {},
             "select": ["*"]
         }
+
+        if assigned_by_ids:
+            params["filter"]["RESPONSIBLE_ID"] = assigned_by_ids
 
         if owner_id:
             params["filter"]["OWNER_ID"] = owner_id
