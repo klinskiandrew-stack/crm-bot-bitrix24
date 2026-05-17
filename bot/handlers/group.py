@@ -325,15 +325,11 @@ async def process_question(
         typing_task.cancel()
 
 
-@router.message(F.text)
+@router.message(F.text, F.chat.type.in_({"group", "supergroup"}))
 async def handle_mention(message: types.Message, user_context: dict = None):
     """Handle bot mentions and replies in group chats."""
 
     if not user_context:
-        return
-
-    # Skip DMs — they're handled by private.py.
-    if message.chat.type == "private":
         return
 
     await _ensure_bot_identity(message.bot)

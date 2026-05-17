@@ -29,7 +29,7 @@ async def start_command(message: types.Message, user_context: dict = None):
     logger.info("User started private chat", user_id=user_context["telegram_id"])
 
 
-@router.message(F.text)
+@router.message(F.text, F.chat.type == "private")
 async def text_message(message: types.Message, user_context: dict = None):
     """Any text in DM = a question for the bot. Auth is enforced by middleware
     (unknown users get a 'Доступ запрещен' before reaching this handler)."""
