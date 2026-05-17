@@ -217,6 +217,12 @@ class DeepSeekClient:
             "messages": _messages_anthropic_to_openai(system, messages),
             "max_tokens": max_tokens,
             "temperature": temperature,
+            # Disable thinking mode. With thinking enabled, the model emits
+            # reasoning_content alongside tool_calls — and DeepSeek then
+            # requires us to echo that reasoning_content back on the next
+            # turn or it 400s. Plus it costs extra output tokens we don't
+            # need for CRM lookups.
+            "thinking": {"type": "disabled"},
         }
         if tools:
             body["tools"] = _tools_anthropic_to_openai(tools)
