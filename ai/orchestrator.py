@@ -257,13 +257,26 @@ class Orchestrator:
         # Max iterations reached - try to get final response without tools
         logger.warning("Max iterations reached, requesting final response", iteration=iteration, tools_called=tools_called)
 
-        # Request final response without tools
+        # Without tools, some models (notably DeepSeek) will print tool calls
+        # as raw text (DSML markup) when they "want" to call something but
+        # the API rejects it. Tell the model explicitly to give a text-only
+        # answer based on the data already collected.
+        no_tools_system = (
+            system_prompt
+            + "\n\n=== ВАЖНО ===\n"
+            "Достигнут лимит обращений к инструментам. БОЛЬШЕ НЕ ВЫЗЫВАЙ ИНСТРУМЕНТЫ — "
+            "ни через tool_calls, ни в текстовом виде (никаких <invoke>, <tool_calls>, <function>, DSML).\n"
+            "На основе данных, которые УЖЕ собраны в предыдущих сообщениях, "
+            "дай человеку короткий и понятный текстовый ответ. Если данных явно "
+            "недостаточно — честно скажи это одним абзацем."
+        )
+
         try:
             final_response = await self.client.send_message(
                 messages=messages,
-                system=system_prompt,
+                system=no_tools_system,
                 model=model,
-                tools=None,  # No tools for final response
+                tools=None,
                 max_tokens=1024
             )
 
