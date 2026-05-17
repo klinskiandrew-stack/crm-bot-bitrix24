@@ -194,8 +194,18 @@ class DeepSeekClient:
                     "Content-Type": "application/json",
                 },
                 json=body,
+                timeout=aiohttp.ClientTimeout(total=90),
             ) as resp:
-                raw = await resp.json()
+                # content_type=None: bypass aiohttp's strict mime check.
+                # CloudFront in front of DeepSeek occasionally returns
+                # application/octet-stream even on a valid JSON body.
+                text = await resp.text()
+                try:
+                    raw = json.loads(text)
+                except json.JSONDecodeError:
+                    logger.error("DeepSeek non-JSON response", status=resp.status, body=text[:300])
+                    raise RuntimeError(f"DeepSeek returned non-JSON (status={resp.status}): {text[:200]}")
+
                 if resp.status != 200 or "error" in raw:
                     msg = (raw.get("error") or {}).get("message") if isinstance(raw.get("error"), dict) else raw
                     logger.error("DeepSeek API error", status=resp.status, response=str(raw)[:300])
