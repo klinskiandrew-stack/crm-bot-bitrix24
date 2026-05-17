@@ -144,7 +144,11 @@ class Bitrix24Client:
         filter_by_date_to: str = None,
         limit: int = 50
     ) -> List[Dict[str, Any]]:
-        """Get deals for assigned users."""
+        """Get deals for assigned users.
+
+        Includes UTM fields by default so reports like 'deals by traffic
+        source' don't need to fan out to get_deal_full per row.
+        """
         params = {
             "filter": {},
             "select": [
@@ -152,7 +156,8 @@ class Bitrix24Client:
                 "OPPORTUNITY", "CURRENCY_ID", "CLOSED",
                 "DATE_CREATE", "BEGINDATE", "CLOSEDATE",
                 "ASSIGNED_BY_ID", "CONTACT_ID", "COMPANY_ID",
-                "TYPE_ID", "CATEGORY_ID"
+                "TYPE_ID", "CATEGORY_ID", "SOURCE_ID", "SOURCE_DESCRIPTION",
+                "UTM_SOURCE", "UTM_MEDIUM", "UTM_CAMPAIGN", "UTM_CONTENT", "UTM_TERM",
             ]
         }
 
@@ -183,14 +188,20 @@ class Bitrix24Client:
         filter_by_date_to: str = None,
         limit: int = 50
     ) -> List[Dict[str, Any]]:
-        """Get leads for assigned users."""
+        """Get leads for assigned users.
+
+        Includes UTM fields by default so reports like 'leads by traffic
+        source' don't need to fan out to get_lead_full per row.
+        """
         params = {
             "filter": {},
             "select": [
                 "ID", "TITLE", "STATUS_ID", "STATUS_SEMANTIC_ID",
                 "OPPORTUNITY", "CURRENCY_ID",
                 "DATE_CREATE", "DATE_MODIFY", "ASSIGNED_BY_ID",
-                "NAME", "LAST_NAME", "COMPANY_TITLE", "SOURCE_ID"
+                "NAME", "LAST_NAME", "COMPANY_TITLE",
+                "SOURCE_ID", "SOURCE_DESCRIPTION",
+                "UTM_SOURCE", "UTM_MEDIUM", "UTM_CAMPAIGN", "UTM_CONTENT", "UTM_TERM",
             ]
         }
 
