@@ -12,6 +12,9 @@ class KieAIClient:
         self.client = AsyncAnthropic(
             api_key=settings.kie_api_key,
             base_url=settings.kie_base_url,
+            default_headers={
+                "Authorization": f"Bearer {settings.kie_api_key}",
+            },
         )
         self.default_model = "claude-sonnet-4-6"
 
