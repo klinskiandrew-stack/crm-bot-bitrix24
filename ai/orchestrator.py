@@ -6,6 +6,7 @@ from ai.client import KieAIClient
 from ai.router import router
 from ai.tools import get_tools_definitions
 from ai.tool_handlers import handlers
+from config import settings
 
 logger = structlog.get_logger()
 
@@ -15,7 +16,9 @@ class Orchestrator:
 
     def __init__(self):
         self.client = KieAIClient()
-        self.max_iterations = 5
+        self.max_iterations = settings.max_iterations
+        self.max_input_tokens = settings.max_request_input_tokens
+        self.max_credits = settings.max_request_credits
         self.tool_definitions = get_tools_definitions()
 
     async def get_tools_list(self) -> List[Dict[str, Any]]:
@@ -49,6 +52,7 @@ class Orchestrator:
         response = None
         tools_called = []
         total_credits = 0.0
+        total_input_tokens = 0
 
         while iteration < self.max_iterations:
             iteration += 1
@@ -61,6 +65,37 @@ class Orchestrator:
                     model=model
                 )
                 total_credits += float(response.get("credits_consumed", 0) or 0)
+                total_input_tokens += int(response.get("usage", {}).get("input_tokens", 0))
+
+                # CIRCUIT BREAKER L1 — per-request token/credit ceiling.
+                # Triggered after Claude has actually been called, so we know
+                # the real cost so far. Prevents runaway costs from a single
+                # bad question (worst case we've seen: 83 cr in 6 iterations).
+                if total_input_tokens > self.max_input_tokens or total_credits > self.max_credits:
+                    logger.warning(
+                        "Circuit breaker tripped (per-request limit)",
+                        iteration=iteration,
+                        total_input_tokens=total_input_tokens,
+                        total_credits=total_credits,
+                        max_input_tokens=self.max_input_tokens,
+                        max_credits=self.max_credits,
+                        tools_called=tools_called,
+                    )
+                    return {
+                        "answer": (
+                            "К сожалению, не удалось собрать ответ на этот вопрос за разумное число шагов. "
+                            "Попробуйте сформулировать запрос конкретнее — например, добавьте период, "
+                            "конкретную воронку или сузьте критерий поиска."
+                        ),
+                        "error": "circuit_breaker_per_request",
+                        "model": model,
+                        "iterations": iteration,
+                        "tools_called": tools_called,
+                        "usage": response.get("usage", {}),
+                        "credits_consumed": total_credits,
+                        "input_tokens_total": total_input_tokens,
+                        "duration_ms": int((time.time() - start_time) * 1000),
+                    }
             except Exception as e:
                 logger.error("Claude API error", error=str(e), iteration=iteration)
                 return {

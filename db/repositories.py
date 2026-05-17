@@ -219,6 +219,17 @@ class AuditRepository:
             "avg_input_tokens": total_input_tokens // len(rows) if rows else 0
         }
 
+    async def get_daily_credits_spent(self) -> float:
+        """Sum credits consumed today (UTC midnight to now) across all users."""
+        today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+        rows = await db.fetch_all(
+            "SELECT credits_consumed FROM audit_log WHERE created_at >= ?",
+            (today_start,)
+        )
+        if not rows:
+            return 0.0
+        return float(sum((row["credits_consumed"] or 0) for row in rows))
+
     async def get_recent_errors(self, limit: int = 10) -> List[Dict[str, Any]]:
         """Get recent errors from audit log."""
         rows = await db.fetch_all(

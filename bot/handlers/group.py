@@ -1,11 +1,13 @@
 from aiogram import Router, types, F
 from aiogram.enums import ParseMode
 from aiogram.types import User
+from datetime import date
 import html
 import json
 import re
 import time
 import structlog
+from config import settings
 from db.repositories import audit as audit_repo, sessions as sessions_repo
 from ai.prompts import get_system_prompt
 from ai.orchestrator import Orchestrator
@@ -14,6 +16,30 @@ logger = structlog.get_logger()
 
 router = Router()
 orchestrator = Orchestrator()
+
+# Daily global-limit alert state — send admin alert at most once per UTC day.
+_daily_alert_sent_on: dict = {"date": None}
+
+
+async def _maybe_alert_admin_once(bot, spent: float):
+    """Send admin a Telegram alert the first time daily limit hits today."""
+    today = date.today()
+    if _daily_alert_sent_on["date"] == today:
+        return
+    _daily_alert_sent_on["date"] = today
+    try:
+        await bot.send_message(
+            settings.admin_telegram_id,
+            (
+                f"⚠️ <b>Дневной лимит расхода исчерпан</b>\n\n"
+                f"Потрачено: <b>{spent:.2f} cr</b>\n"
+                f"Лимит: <b>{settings.daily_global_credits_limit:.0f} cr</b>\n\n"
+                f"Бот временно НЕ отвечает на запросы до 00:00 UTC."
+            ),
+            parse_mode=ParseMode.HTML,
+        )
+    except Exception as e:
+        logger.warning("Failed to send daily limit alert to admin", error=str(e))
 
 
 _MD_LINK_RE = re.compile(r"\[([^\]]+)\]\((https?://[^)\s]+)\)")
@@ -79,9 +105,27 @@ async def handle_mention(message: types.Message, user_context: dict = None):
         await message.reply("Пожалуйста, задайте вопрос.")
         return
 
-    # Load conversation history
     user_id = message.from_user.id
     chat_id = message.chat.id
+
+    # CIRCUIT BREAKER L3 — global daily spend ceiling.
+    # If the bot has burned through its daily budget, refuse new requests
+    # until UTC midnight. Alert admin once.
+    daily_spent = await audit_repo.get_daily_credits_spent()
+    if daily_spent >= settings.daily_global_credits_limit:
+        logger.warning(
+            "Daily global limit reached — refusing request",
+            user_id=user_id,
+            spent=daily_spent,
+            limit=settings.daily_global_credits_limit,
+        )
+        await _maybe_alert_admin_once(message.bot, daily_spent)
+        await message.reply(
+            "⚠️ Дневной лимит запросов исчерпан. Попробуйте завтра или обратитесь к администратору."
+        )
+        return
+
+    # Load conversation history
     history = await sessions_repo.get_session(user_id, chat_id) or []
 
     start_time = time.time()

@@ -25,6 +25,14 @@ class Settings(BaseSettings):
     session_ttl_minutes: int = 30
     max_session_messages: int = 20
 
+    # Circuit breakers — Level 1 (per-request)
+    max_iterations: int = 3
+    max_request_input_tokens: int = 80_000   # cumulative across iterations
+    max_request_credits: float = 30.0        # cumulative across iterations
+
+    # Circuit breaker — Level 3 (global daily)
+    daily_global_credits_limit: float = 5000.0  # ~$25 at 1cr=$0.005
+
     class Config:
         env_file = ".env"
         case_sensitive = False
