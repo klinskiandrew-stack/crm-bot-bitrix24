@@ -81,6 +81,11 @@ class Orchestrator:
         tools_called = []
         total_credits = 0.0
         total_input_tokens = 0
+        # Logical model name from router (e.g. claude-sonnet-4-6) — may not
+        # match the model that actually served (DeepSeek substitutes its own).
+        # actual_model is updated from each response so audit_log records what
+        # actually answered.
+        actual_model = model
 
         while iteration < self.max_iterations:
             iteration += 1
@@ -94,6 +99,7 @@ class Orchestrator:
                 )
                 total_credits += float(response.get("credits_consumed", 0) or 0)
                 total_input_tokens += int(response.get("usage", {}).get("input_tokens", 0))
+                actual_model = response.get("model") or actual_model
 
                 # CIRCUIT BREAKER L1 — per-request token/credit ceiling.
                 # Triggered after Claude has actually been called, so we know
@@ -116,7 +122,7 @@ class Orchestrator:
                             "конкретную воронку или сузьте критерий поиска."
                         ),
                         "error": "circuit_breaker_per_request",
-                        "model": model,
+                        "model": actual_model,
                         "iterations": iteration,
                         "tools_called": tools_called,
                         "usage": response.get("usage", {}),
@@ -129,7 +135,7 @@ class Orchestrator:
                 return {
                     "answer": f"Ошибка при обращении к ИИ: {str(e)}",
                     "error": str(e),
-                    "model": model,
+                    "model": actual_model,
                     "iterations": iteration,
                     "tools_called": tools_called,
                     "usage": {},
@@ -157,7 +163,7 @@ class Orchestrator:
 
                 return {
                     "answer": answer,
-                    "model": model,
+                    "model": actual_model,
                     "iterations": iteration,
                     "tools_called": tools_called,
                     "usage": response.get("usage", {}),
@@ -240,7 +246,7 @@ class Orchestrator:
 
                 return {
                     "answer": answer,
-                    "model": model,
+                    "model": actual_model,
                     "iterations": iteration,
                     "tools_called": tools_called,
                     "usage": response.get("usage", {}),
@@ -274,7 +280,7 @@ class Orchestrator:
         return {
             "answer": answer,
             "error": "Max iterations reached",
-            "model": model,
+            "model": actual_model,
             "iterations": iteration,
             "tools_called": tools_called,
             "usage": final_response.get("usage", {}),
