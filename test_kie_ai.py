@@ -26,6 +26,9 @@ async def test_kie_ai():
         client = AsyncAnthropic(
             api_key=settings.kie_api_key,
             base_url=settings.kie_base_url,
+            default_headers={
+                "Authorization": f"Bearer {settings.kie_api_key}",
+            },
         )
         print("  ✓ AsyncAnthropic client created")
     except Exception as e:
