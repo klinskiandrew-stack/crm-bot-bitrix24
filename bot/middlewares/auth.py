@@ -51,13 +51,19 @@ class AuthMiddleware(BaseMiddleware):
             except (json.JSONDecodeError, TypeError):
                 logger.error("Invalid b24_user_ids JSON", telegram_id=user_id)
 
+        # allow_private may be missing for old DB rows — default to 1 (allow)
+        allow_private = user.get("allow_private")
+        if allow_private is None:
+            allow_private = 1
+
         # Add user context to data
         data["user_context"] = {
             "telegram_id": user["telegram_id"],
             "role": user["role"],
             "b24_user_ids": b24_user_ids,
             "display_name": user.get("display_name", f"User{user_id}"),
-            "is_admin": user["role"] == "admin"
+            "is_admin": user["role"] == "admin",
+            "allow_private": bool(allow_private),
         }
 
         logger.info(

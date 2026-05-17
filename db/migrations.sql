@@ -5,8 +5,13 @@ CREATE TABLE IF NOT EXISTS users (
     b24_user_ids       TEXT,                  -- JSON-массив ID ответственных в Б24
     display_name       TEXT,
     is_active          INTEGER DEFAULT 1,
+    allow_private      INTEGER DEFAULT 1,     -- 0 = только групповые чаты, без личных сообщений
     created_at         TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Idempotent migration: добавить колонку если её ещё нет (для существующих БД)
+-- SQLite поддерживает ALTER TABLE ADD COLUMN; ошибку "duplicate column" игнорируем
+-- через PRAGMA на стороне приложения.
 
 -- Глобальные настройки бота (key-value)
 -- Ключи: current_model, routing_mode (auto|forced), default_model

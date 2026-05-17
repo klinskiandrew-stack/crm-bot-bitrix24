@@ -15,6 +15,13 @@ async def start_command(message: types.Message, user_context: dict = None):
         await message.answer("Доступ запрещен.")
         return
 
+    if not user_context.get("allow_private", True):
+        await message.answer(
+            "Я общаюсь только в рабочих чатах. Задавайте вопросы там — "
+            "просто упомяните меня через @grouasistant_bot."
+        )
+        return
+
     await message.answer(
         f"Привет, {user_context['display_name']}! 👋\n\n"
         f"Я — Гроу, ассистент компании Growzone. Спрашивайте про сделки, лидов, "
@@ -34,6 +41,13 @@ async def text_message(message: types.Message, user_context: dict = None):
     """Any text in DM = a question for the bot. Auth is enforced by middleware
     (unknown users get a 'Доступ запрещен' before reaching this handler)."""
     if not user_context:
+        return
+
+    if not user_context.get("allow_private", True):
+        await message.reply(
+            "Я общаюсь только в рабочих чатах. Задавайте вопросы там — "
+            "просто упомяните меня через @grouasistant_bot."
+        )
         return
 
     question = (message.text or "").strip()

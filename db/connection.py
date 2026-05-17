@@ -24,13 +24,30 @@ class Database:
         logger.info("Database initialized", db_path=self.db_path)
 
     async def _run_migrations(self):
-        """Run SQL migrations from migrations.sql."""
+        """Run SQL migrations from migrations.sql, then apply idempotent
+        ALTER TABLE patches for existing databases."""
         migration_file = Path(__file__).parent / "migrations.sql"
         with open(migration_file) as f:
             migrations = f.read()
 
         await self._connection.executescript(migrations)
+
+        # Patch existing databases — add new columns idempotently
+        await self._ensure_column("users", "allow_private", "INTEGER DEFAULT 1")
+
         await self._connection.commit()
+
+    async def _ensure_column(self, table: str, column: str, definition: str):
+        """ALTER TABLE ADD COLUMN if column doesn't exist yet.
+        SQLite has no 'IF NOT EXISTS' for columns — check via PRAGMA."""
+        cursor = await self._connection.execute(f"PRAGMA table_info({table})")
+        rows = await cursor.fetchall()
+        existing = {row[1] for row in rows}  # row[1] is column name
+        if column not in existing:
+            await self._connection.execute(
+                f"ALTER TABLE {table} ADD COLUMN {column} {definition}"
+            )
+            logger.info("Added column", table=table, column=column)
 
     async def close(self):
         """Close database connection."""
