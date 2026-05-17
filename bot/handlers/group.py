@@ -25,7 +25,7 @@ async def handle_mention(message: types.Message, user_context: dict = None):
     mention_text = None
 
     for entity in message.entities:
-        if entity.type == types.MessageEntityType.MENTION:
+        if entity.type == "mention":
             mention_text = message.text[entity.offset:entity.offset + entity.length]
             break
 
