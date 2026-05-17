@@ -1,6 +1,7 @@
 from aiogram import Router, types, F
 from aiogram.filters import Command
 import structlog
+from bot.handlers.group import process_question
 
 logger = structlog.get_logger()
 
@@ -16,10 +17,13 @@ async def start_command(message: types.Message, user_context: dict = None):
 
     await message.answer(
         f"Привет, {user_context['display_name']}! 👋\n\n"
-        f"Я — ассистент для работы с CRM Bitrix24.\n\n"
-        f"В группах упоминайте меня, чтобы задать вопрос о сделках, лидах или активности.\n"
-        f"Пример: '@bot_name сколько сделок в работе?'\n\n"
-        f"Роль: {user_context['role']}"
+        f"Я — Гроу, ассистент компании Growzone. Спрашивайте про сделки, лидов, "
+        f"замеры, продажи, активность менеджеров — отвечу на основе данных из Bitrix24.\n\n"
+        f"Просто напишите вопрос в этом чате, например:\n"
+        f"• «Сколько было лидов за сегодня?»\n"
+        f"• «Покажи воронку продаж за май»\n"
+        f"• «Найди контакты с именем Иван»\n\n"
+        f"В групповых чатах меня нужно упоминать через @ или ответить на моё сообщение."
     )
 
     logger.info("User started private chat", user_id=user_context["telegram_id"])
@@ -27,13 +31,13 @@ async def start_command(message: types.Message, user_context: dict = None):
 
 @router.message(F.text)
 async def text_message(message: types.Message, user_context: dict = None):
-    """Handle regular text messages in private chat."""
+    """Any text in DM = a question for the bot. Auth is enforced by middleware
+    (unknown users get a 'Доступ запрещен' before reaching this handler)."""
     if not user_context:
-        await message.answer("Доступ запрещен.")
         return
 
-    # For phase 1, private messages are not fully implemented
-    await message.answer(
-        "На этом этапе свободные вопросы в личных сообщениях еще не поддерживаются. "
-        "Используйте упоминания в групповых чатах или выберите команду из меню."
-    )
+    question = (message.text or "").strip()
+    if not question:
+        return
+
+    await process_question(message, question, user_context)

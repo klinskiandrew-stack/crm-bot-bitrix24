@@ -166,18 +166,13 @@ def _extract_question(message: types.Message) -> str | None:
 
 # ---------- main handler ----------
 
-@router.message(F.text)
-async def handle_mention(message: types.Message, user_context: dict = None):
-    """Handle bot mentions and replies in group chats."""
-
-    if not user_context:
-        return
-
-    await _ensure_bot_identity(message.bot)
-    question = _extract_question(message)
-    if question is None:
-        return  # not addressed to the bot
-
+async def process_question(
+    message: types.Message,
+    question: str,
+    user_context: dict,
+) -> None:
+    """Run the full pipeline for a single user question: daily-limit check,
+    placeholder, orchestrator, final reply. Shared between group and DM."""
     user_id = message.from_user.id
     chat_id = message.chat.id
 
@@ -328,3 +323,22 @@ async def handle_mention(message: types.Message, user_context: dict = None):
 
     finally:
         typing_task.cancel()
+
+
+@router.message(F.text)
+async def handle_mention(message: types.Message, user_context: dict = None):
+    """Handle bot mentions and replies in group chats."""
+
+    if not user_context:
+        return
+
+    # Skip DMs — they're handled by private.py.
+    if message.chat.type == "private":
+        return
+
+    await _ensure_bot_identity(message.bot)
+    question = _extract_question(message)
+    if question is None:
+        return  # not addressed to the bot
+
+    await process_question(message, question, user_context)
