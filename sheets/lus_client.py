@@ -219,15 +219,26 @@ class LusSheetClient:
 
         filtered = [r for r in rows if in_range(r) and (not only_completed or is_completed(r))]
 
+        def _sum(group, key):
+            """Sum only numeric values; ignore strings/None — sheet sometimes
+            has stray '#REF!', '—' or text in money cells that _money returns
+            as None but type-promoting cells via formulas can yield str too."""
+            total = 0.0
+            for r in group:
+                v = r.get(key)
+                if isinstance(v, (int, float)):
+                    total += float(v)
+            return round(total, 2)
+
         def aggregate(group: List[Dict[str, Any]]):
             return {
                 "count": len(group),
-                "revenue_plan": round(sum((r.get("Выручка план") or 0) for r in group), 2),
-                "revenue_fact": round(sum((r.get("Выручка признанная") or 0) for r in group), 2),
-                "paid_by_client": round(sum((r.get("Оплачено клиентом") or 0) for r in group), 2),
-                "debt": round(sum((r.get("Дебеторка") or 0) for r in group), 2),
-                "expenses_fact": round(sum((r.get("Расходы итого факт") or 0) for r in group), 2),
-                "margin": round(sum((r.get("Маржинальная прибыль") or 0) for r in group), 2),
+                "revenue_plan": _sum(group, "Выручка план"),
+                "revenue_fact": _sum(group, "Выручка признанная"),
+                "paid_by_client": _sum(group, "Оплачено клиентом"),
+                "debt": _sum(group, "Дебеторка"),
+                "expenses_fact": _sum(group, "Расходы итого факт"),
+                "margin": _sum(group, "Маржинальная прибыль"),
                 "completed_count": sum(1 for r in group if is_completed(r)),
             }
 
@@ -248,7 +259,8 @@ class LusSheetClient:
             grouped = [{"key": k, **aggregate(v)} for k, v in buckets.items()]
             grouped.sort(key=lambda x: x.get("revenue_fact", 0) or 0, reverse=True)
             result["group_by"] = group_by
-            result["groups"] = grouped[:30]
+            # Cap to 15 rows to keep LLM payload small.
+            result["groups"] = grouped[:15]
         return result
 
     async def status_counts(self) -> Dict[str, int]:

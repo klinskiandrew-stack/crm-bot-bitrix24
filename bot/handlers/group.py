@@ -312,7 +312,10 @@ async def process_question(
             {"role": "user", "content": question},
             {"role": "assistant", "content": answer},
         ]
-        new_history = new_history[-20:]
+        # Keep last 8 messages (4 user/assistant turns). 20+ blew through
+        # the 80K input-token circuit breaker on conversations that mixed
+        # CRM + Metrika + LUS — each turn dragged in old tool_results.
+        new_history = new_history[-8:]
         await sessions_repo.save_session(user_id, chat_id, new_history)
 
         # Replace placeholder with final answer. HTML with fallback to plain.
