@@ -1,11 +1,26 @@
 import aiohttp
 import json
+from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional
 import structlog
 from config import settings
 from b24.rate_limiter import RateLimiter
 
 logger = structlog.get_logger()
+
+
+def _day_after(date_str: str) -> str:
+    """Convert YYYY-MM-DD to next day for use as exclusive upper bound (<).
+
+    Bitrix24 treats <=DATE_CREATE='2026-05-17' as <= 2026-05-17 00:00:00,
+    excluding everything created later that same day. To include the full
+    day, use <DATE_CREATE='2026-05-18' instead.
+    """
+    try:
+        d = datetime.strptime(date_str, "%Y-%m-%d")
+        return (d + timedelta(days=1)).strftime("%Y-%m-%d")
+    except (ValueError, TypeError):
+        return date_str
 
 
 class Bitrix24Client:
@@ -113,7 +128,7 @@ class Bitrix24Client:
         if filter_by_date_from:
             params["filter"][">=DATE_CREATE"] = filter_by_date_from
         if filter_by_date_to:
-            params["filter"]["<=DATE_CREATE"] = filter_by_date_to
+            params["filter"]["<DATE_CREATE"] = _day_after(filter_by_date_to)
 
         return await self._paginate("crm.deal.list", params, limit=limit, max_items=limit)
 
@@ -150,7 +165,7 @@ class Bitrix24Client:
         if filter_by_date_from:
             params["filter"][">=DATE_CREATE"] = filter_by_date_from
         if filter_by_date_to:
-            params["filter"]["<=DATE_CREATE"] = filter_by_date_to
+            params["filter"]["<DATE_CREATE"] = _day_after(filter_by_date_to)
 
         return await self._paginate("crm.lead.list", params, limit=limit, max_items=limit)
 
@@ -235,7 +250,7 @@ class Bitrix24Client:
         if date_from:
             params["filter"][">=CREATED"] = date_from
         if date_to:
-            params["filter"]["<=CREATED"] = date_to
+            params["filter"]["<CREATED"] = _day_after(date_to)
 
         return await self._paginate("crm.activity.list", params, limit=limit, max_items=limit)
 
