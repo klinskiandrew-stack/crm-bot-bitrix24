@@ -39,12 +39,26 @@ class KieAIClient:
                 "temperature": temperature,
             }
 
+            # System prompt as a block list with cache_control on the last segment.
+            # Anthropic caches static prefix only — system + tools rarely change between
+            # turns, so marking them ephemeral cuts input cost ~10x on cache hits.
             if system:
-                kwargs["system"] = system
+                kwargs["system"] = [
+                    {
+                        "type": "text",
+                        "text": system,
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ]
 
-            # Only add tools if list is not empty
             if tools and len(tools) > 0:
-                kwargs["tools"] = tools
+                # Cache the tool definitions by tagging the last tool.
+                cached_tools = [dict(t) for t in tools]
+                cached_tools[-1] = {
+                    **cached_tools[-1],
+                    "cache_control": {"type": "ephemeral"},
+                }
+                kwargs["tools"] = cached_tools
 
             logger.debug(
                 "Sending request to Kie.ai",
@@ -105,8 +119,10 @@ class KieAIClient:
                 "Claude API call successful",
                 model=model,
                 stop_reason=response.stop_reason,
-                input_tokens=response.usage.input_tokens,
-                output_tokens=response.usage.output_tokens,
+                input_tokens=usage_info.get("input_tokens", 0),
+                output_tokens=usage_info.get("output_tokens", 0),
+                cache_creation=usage_info.get("cache_creation_input_tokens", 0),
+                cache_read=usage_info.get("cache_read_input_tokens", 0),
                 duration_ms=duration_ms
             )
 
