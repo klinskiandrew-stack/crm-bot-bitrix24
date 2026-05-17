@@ -7,6 +7,7 @@ from typing import Dict, Any, List
 import structlog
 from b24.client import Bitrix24Client
 from metrika.client import metrika_client
+from sheets.lus_client import lus_client
 
 logger = structlog.get_logger()
 
@@ -67,6 +68,12 @@ class ToolHandlers:
                 return await self.metrika_traffic_summary(tool_input, user_context)
             elif tool_name == "metrika_traffic_by_source":
                 return await self.metrika_traffic_by_source(tool_input, user_context)
+            elif tool_name == "lus_get_deal":
+                return await self.lus_get_deal(tool_input, user_context)
+            elif tool_name == "lus_search":
+                return await self.lus_search(tool_input, user_context)
+            elif tool_name == "lus_financials":
+                return await self.lus_financials(tool_input, user_context)
             else:
                 return {"error": f"Unknown tool: {tool_name}"}
         except Exception as e:
@@ -512,6 +519,56 @@ class ToolHandlers:
             return {"error": f"breakdown должен быть одним из: {', '.join(dim_map)}"}
 
         return await metrika_client.get_traffic_by_source(date_from, date_to, dimension=dimension, limit=limit)
+
+
+    # ---------- LUS Google Sheet tools ----------
+
+    async def lus_get_deal(self, params: Dict[str, Any], user_context: Dict[str, Any]) -> Dict[str, Any]:
+        """Full row from the 'Сделки' tab by ID (порядковый номер 1-496)."""
+        deal_id = params.get("id")
+        if deal_id is None:
+            return {"error": "id обязателен"}
+        deal = await lus_client.get_deal(int(deal_id))
+        if not deal:
+            return {"error": f"Сделка #{deal_id} не найдена в таблице ЛУС"}
+        return {"deal": deal}
+
+    async def lus_search(self, params: Dict[str, Any], user_context: Dict[str, Any]) -> Dict[str, Any]:
+        """Search 'Сделки' by контрагент / номер договора / город (substring)."""
+        query = (params.get("query") or "").strip()
+        if not query:
+            return {"error": "query обязателен"}
+        limit = min(int(params.get("limit", 10)), 30)
+        rows = await lus_client.search(query, limit=limit)
+        return {"query": query, "found": len(rows), "rows": rows}
+
+    async def lus_financials(self, params: Dict[str, Any], user_context: Dict[str, Any]) -> Dict[str, Any]:
+        """Aggregate financial KPIs from the 'Сделки' tab over a date range."""
+        err = _validate_params(params, date_keys=("date_from", "date_to"), stage_key="not_used")
+        if err:
+            return err
+        group_by = params.get("group_by")
+        allowed_groups = {
+            "источник", "источник клиента",
+            "направление", "услуга", "партнер", "партнёр", "месяц", "статус",
+        }
+        if group_by and group_by.lower() not in allowed_groups:
+            return {"error": f"group_by должен быть одним из: {', '.join(sorted(allowed_groups))}"}
+        # Normalise group_by to actual column name in sheet
+        group_map = {
+            "источник": "Источник клиента", "источник клиента": "Источник клиента",
+            "направление": "Направление", "услуга": "Услуга",
+            "партнер": "Партнер", "партнёр": "Партнер",
+            "месяц": "Месяц", "статус": "Статус",
+        }
+        actual_group = group_map.get(group_by.lower()) if group_by else None
+        only_completed = bool(params.get("only_completed", False))
+        return await lus_client.financials(
+            date_from=params.get("date_from"),
+            date_to=params.get("date_to"),
+            group_by=actual_group,
+            only_completed=only_completed,
+        )
 
 
 # Global handlers instance

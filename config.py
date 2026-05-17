@@ -27,6 +27,9 @@ class Settings(BaseSettings):
     metrika_counter_id: str = ""
     metrika_base_url: str = "https://api-metrika.yandex.net"
 
+    # Google Sheets (optional). Service account JSON path. SA must have read access to the sheet.
+    google_sa_path: str = "/opt/crm-bot/secrets/google_sa.json"
+
     # Which provider to use for LLM calls: "kie" or "deepseek"
     llm_provider: str = "kie"
 
