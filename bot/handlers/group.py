@@ -200,16 +200,23 @@ async def handle_mention(message: types.Message, user_context: dict = None):
     start_time = time.time()
 
     # Send placeholder so the user immediately sees that the bot took the request.
-    placeholder = await message.reply("🌱 Гроу думает...")
+    # If Telegram is having a momentary timeout, don't kill the whole flow —
+    # we'll just send the final answer as a fresh reply at the end.
+    placeholder = None
+    try:
+        placeholder = await message.reply("🌱 Гроу думает...")
+    except Exception as e:
+        logger.warning("Placeholder send failed, continuing without progress UI", error=str(e))
 
     # Start typing indicator loop.
     typing_task = asyncio.create_task(_typing_loop(message.bot, chat_id))
 
     # Progress callback edits the placeholder as we move through stages.
-    # Uses a small debounce to avoid hammering the Telegram edit endpoint.
     last_edit_text = {"v": "🌱 Гроу думает..."}
 
     async def _progress(stage: str, detail: str = ""):
+        if placeholder is None:
+            return
         new_text = _stage_to_text(stage, detail)
         if new_text == last_edit_text["v"]:
             return
@@ -266,16 +273,23 @@ async def handle_mention(message: types.Message, user_context: dict = None):
         await sessions_repo.save_session(user_id, chat_id, new_history)
 
         # Replace placeholder with final answer. HTML with fallback to plain.
+        # If we never got a placeholder, send a fresh reply instead.
         formatted = _markdown_to_telegram_html(answer)[:4096]
-        try:
-            await placeholder.edit_text(formatted, parse_mode=ParseMode.HTML)
-        except Exception as send_err:
-            logger.warning("HTML edit failed, falling back to plain", error=str(send_err))
+        if placeholder is None:
             try:
-                await placeholder.edit_text(answer[:4096])
-            except Exception as plain_err:
-                logger.warning("Plain edit also failed, sending new message", error=str(plain_err))
+                await message.reply(formatted, parse_mode=ParseMode.HTML)
+            except Exception:
                 await message.reply(answer[:4096])
+        else:
+            try:
+                await placeholder.edit_text(formatted, parse_mode=ParseMode.HTML)
+            except Exception as send_err:
+                logger.warning("HTML edit failed, falling back to plain", error=str(send_err))
+                try:
+                    await placeholder.edit_text(answer[:4096])
+                except Exception as plain_err:
+                    logger.warning("Plain edit also failed, sending new message", error=str(plain_err))
+                    await message.reply(answer[:4096])
 
         logger.info(
             "Group message processed",
@@ -301,10 +315,16 @@ async def handle_mention(message: types.Message, user_context: dict = None):
             duration_ms=duration_ms,
         )
 
+        if placeholder is not None:
+            try:
+                await placeholder.edit_text("⚠️ Ошибка при обработке вопроса. Попробуйте позже.")
+                return
+            except Exception:
+                pass
         try:
-            await placeholder.edit_text("⚠️ Ошибка при обработке вопроса. Попробуйте позже.")
-        except Exception:
             await message.reply("⚠️ Ошибка при обработке вопроса. Попробуйте позже.")
+        except Exception:
+            logger.warning("Could not send error reply either")
 
     finally:
         typing_task.cancel()
