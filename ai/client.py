@@ -39,7 +39,8 @@ class KieAIClient:
             if system:
                 kwargs["system"] = system
 
-            if tools:
+            # Only add tools if list is not empty
+            if tools and len(tools) > 0:
                 kwargs["tools"] = tools
 
             logger.debug(
