@@ -1,5 +1,6 @@
 from anthropic import AsyncAnthropic
 from typing import Optional, List, Dict, Any
+import json
 import time
 import structlog
 from config import settings
@@ -55,7 +56,17 @@ class KieAIClient:
                 first_message_role=messages[0].get("role") if messages else None
             )
 
-            response = await self.client.messages.create(**kwargs)
+            # Use with_raw_response so we can read Kie-specific top-level fields
+            # like credits_consumed that Anthropic SDK drops during Pydantic parsing.
+            raw = await self.client.messages.with_raw_response.create(**kwargs)
+            response = raw.parse()
+
+            kie_credits = 0.0
+            try:
+                raw_json = json.loads(raw.text)
+                kie_credits = float(raw_json.get("credits_consumed") or 0)
+            except (ValueError, AttributeError, TypeError) as e:
+                logger.debug("Could not parse raw response for credits", error=str(e))
 
             logger.debug(
                 "Received response from Kie.ai",
@@ -94,11 +105,8 @@ class KieAIClient:
                 "usage": usage_info,
                 "model": response.model if hasattr(response, 'model') else model,
                 "duration_ms": duration_ms,
+                "credits_consumed": kie_credits,
             }
-
-            # Extract credits_consumed from response if available
-            if hasattr(response, "credits_consumed"):
-                result["credits_consumed"] = response.credits_consumed
 
             logger.info(
                 "Claude API call successful",
@@ -106,8 +114,7 @@ class KieAIClient:
                 stop_reason=response.stop_reason,
                 input_tokens=usage_info.get("input_tokens", 0),
                 output_tokens=usage_info.get("output_tokens", 0),
-                cache_creation=usage_info.get("cache_creation_input_tokens", 0),
-                cache_read=usage_info.get("cache_read_input_tokens", 0),
+                credits_consumed=kie_credits,
                 duration_ms=duration_ms
             )
 

@@ -48,6 +48,7 @@ class Orchestrator:
         iteration = 0
         response = None
         tools_called = []
+        total_credits = 0.0
 
         while iteration < self.max_iterations:
             iteration += 1
@@ -59,6 +60,7 @@ class Orchestrator:
                     tools=tools_list if tools_list else None,
                     model=model
                 )
+                total_credits += float(response.get("credits_consumed", 0) or 0)
             except Exception as e:
                 logger.error("Claude API error", error=str(e), iteration=iteration)
                 return {
@@ -68,6 +70,7 @@ class Orchestrator:
                     "iterations": iteration,
                     "tools_called": tools_called,
                     "usage": {},
+                    "credits_consumed": total_credits,
                     "duration_ms": int((time.time() - start_time) * 1000)
                 }
 
@@ -94,6 +97,7 @@ class Orchestrator:
                     "iterations": iteration,
                     "tools_called": tools_called,
                     "usage": response.get("usage", {}),
+                    "credits_consumed": total_credits,
                     "duration_ms": int((time.time() - start_time) * 1000),
                     "stop_reason": response.get("stop_reason", "end_turn")
                 }

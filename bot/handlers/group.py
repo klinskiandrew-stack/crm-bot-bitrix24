@@ -101,6 +101,7 @@ async def handle_mention(message: types.Message, user_context: dict = None):
             input_tokens=usage.get("input_tokens", 0),
             cached_input_tokens=usage.get("cache_read_input_tokens", 0),
             output_tokens=usage.get("output_tokens", 0),
+            credits_consumed=response.get("credits_consumed", 0),
             duration_ms=duration_ms,
             error=error
         )
