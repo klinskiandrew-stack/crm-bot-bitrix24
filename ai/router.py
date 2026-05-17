@@ -55,7 +55,7 @@ class ModelRouter:
         category = self._categorize_question(question)
 
         model_map = {
-            "simple": "claude-haiku-4-5",
+            "simple": "claude-sonnet-4-6",
             "analytics": "claude-sonnet-4-6",
             "complex": "claude-opus-4-7"
         }
