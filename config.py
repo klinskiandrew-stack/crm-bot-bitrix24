@@ -1,5 +1,6 @@
 from pydantic_settings import BaseSettings
 from pydantic import Field
+from urllib.parse import urlparse
 
 
 class Settings(BaseSettings):
@@ -27,6 +28,12 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         case_sensitive = False
+
+    @property
+    def b24_portal_url(self) -> str:
+        """Portal base URL (e.g. 'https://growzone.bitrix24.ru') derived from webhook."""
+        parsed = urlparse(self.b24_webhook_url)
+        return f"{parsed.scheme}://{parsed.netloc}"
 
 
 settings = Settings()

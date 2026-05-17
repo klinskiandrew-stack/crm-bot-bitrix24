@@ -16,20 +16,40 @@ router = Router()
 orchestrator = Orchestrator()
 
 
+_MD_LINK_RE = re.compile(r"\[([^\]]+)\]\((https?://[^)\s]+)\)")
+
+
 def _markdown_to_telegram_html(text: str) -> str:
     """Convert Claude's basic Markdown to Telegram HTML.
 
-    Claude tends to emit **bold** and *italic*; Telegram doesn't render
-    those without parse_mode. We escape everything as HTML first, then
-    re-introduce supported tags.
+    Order matters: escape HTML special chars FIRST (so user data can't
+    break parsing), then re-inject our supported tags. Markdown links
+    [text](url) are extracted before escaping URL chars.
     """
+    # 1. Extract markdown links to placeholders BEFORE escaping
+    links = []
+
+    def _stash(m):
+        links.append((m.group(1), m.group(2)))
+        return f"\x00LINK{len(links) - 1}\x00"
+
+    text = _MD_LINK_RE.sub(_stash, text)
+
+    # 2. HTML-escape everything (user data, deal titles, etc.)
     safe = html.escape(text, quote=False)
-    # **bold** -> <b>bold</b>
+
+    # 3. Re-inject markdown formatting as HTML tags
     safe = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", safe, flags=re.DOTALL)
-    # __bold__ -> <b>bold</b>
     safe = re.sub(r"__(.+?)__", r"<b>\1</b>", safe, flags=re.DOTALL)
-    # `code` -> <code>code</code>
     safe = re.sub(r"`([^`\n]+)`", r"<code>\1</code>", safe)
+
+    # 4. Restore links — escape both text (for safety) and url (for quotes)
+    def _restore(m):
+        idx = int(m.group(1))
+        link_text, link_url = links[idx]
+        return f'<a href="{html.escape(link_url, quote=True)}">{html.escape(link_text, quote=False)}</a>'
+
+    safe = re.sub(r"\x00LINK(\d+)\x00", _restore, safe)
     return safe
 
 

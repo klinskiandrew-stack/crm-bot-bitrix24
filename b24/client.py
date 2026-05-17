@@ -271,3 +271,69 @@ class Bitrix24Client:
             return []
         result = response.get("result", [])
         return result if isinstance(result, list) else []
+
+    async def get_stage_history(
+        self,
+        stage_id: str,
+        date_from: str,
+        date_to: str,
+        category_id: int = 0,
+        entity_type_id: int = 2,
+    ) -> Dict[str, Any]:
+        """Get events where deals moved to a given stage in a date range.
+
+        Uses crm.stagehistory.list — returns ALL events (not just current
+        state), so we can count e.g. how many deals passed through 'Замер
+        выполнен' even if they've since moved on.
+
+        Returns dict: {events: [...], unique_owner_ids: set, total_events: int}.
+        """
+        params = {
+            "entityTypeId": entity_type_id,
+            "filter": {
+                "=STAGE_ID": stage_id,
+                "=CATEGORY_ID": category_id,
+                ">=CREATED_TIME": f"{date_from}T00:00:00+03:00",
+                "<CREATED_TIME": f"{_day_after(date_to)}T00:00:00+03:00",
+            },
+            "select": ["ID", "OWNER_ID", "STAGE_ID", "CREATED_TIME", "STAGE_SEMANTIC_ID"],
+            "order": {"CREATED_TIME": "ASC"},
+        }
+
+        all_events = []
+        start = 0
+        PAGE = 50
+        while True:
+            response = await self._call("crm.stagehistory.list", params, start=start)
+            if "error" in response:
+                return {"error": response["error"]}
+            items = response.get("result", {}).get("items", [])
+            if not items:
+                break
+            all_events.extend(items)
+            next_start = response.get("next")
+            if next_start is None or len(items) < PAGE:
+                break
+            start = next_start
+            if len(all_events) >= 500:  # safety cap
+                break
+
+        unique = sorted({e["OWNER_ID"] for e in all_events})
+        return {
+            "stage_id": stage_id,
+            "category_id": category_id,
+            "date_from": date_from,
+            "date_to": date_to,
+            "total_events": len(all_events),
+            "unique_deal_count": len(unique),
+            "unique_deal_ids": unique,
+            "events": all_events[:50],  # sample only, to keep payload small
+        }
+
+    def deal_url(self, deal_id) -> str:
+        """Build human-readable URL to a deal card in Bitrix24."""
+        return f"{settings.b24_portal_url}/crm/deal/details/{deal_id}/"
+
+    def lead_url(self, lead_id) -> str:
+        """Build human-readable URL to a lead card in Bitrix24."""
+        return f"{settings.b24_portal_url}/crm/lead/details/{lead_id}/"

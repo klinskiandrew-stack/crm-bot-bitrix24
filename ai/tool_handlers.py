@@ -54,11 +54,47 @@ class ToolHandlers:
                 return await self.get_user_activity_summary(tool_input, user_context)
             elif tool_name == "get_recent_activities":
                 return await self.get_recent_activities(tool_input, user_context)
+            elif tool_name == "count_deals_passed_stage":
+                return await self.count_deals_passed_stage(tool_input, user_context)
             else:
                 return {"error": f"Unknown tool: {tool_name}"}
         except Exception as e:
             logger.error("Tool handler error", tool=tool_name, error=str(e))
             return {"error": str(e)}
+
+    async def count_deals_passed_stage(self, params: Dict[str, Any], user_context: Dict[str, Any]) -> Dict[str, Any]:
+        """Count deals that passed through a given stage in a period.
+
+        Uses history (crm.stagehistory.list) so we count deals that were
+        on the stage at any moment during the period, even if they've
+        since moved on or fallen out.
+        """
+        err = _validate_params(params, date_keys=("date_from", "date_to"), stage_key="not_used")
+        if err:
+            return err
+
+        stage_id = params.get("stage_id")
+        date_from = params.get("date_from")
+        date_to = params.get("date_to")
+        category_id = int(params.get("category_id", 0))
+
+        if not stage_id or not date_from or not date_to:
+            return {"error": "Параметры stage_id, date_from, date_to обязательны"}
+
+        client = await self._get_client()
+        result = await client.get_stage_history(
+            stage_id=stage_id,
+            date_from=date_from,
+            date_to=date_to,
+            category_id=category_id,
+        )
+
+        if "error" in result:
+            return result
+
+        # Enrich with card URLs for sample
+        result["sample_deal_urls"] = [client.deal_url(d) for d in result["unique_deal_ids"][:10]]
+        return result
 
     async def get_deals(self, params: Dict[str, Any], user_context: Dict[str, Any]) -> Dict[str, Any]:
         """Get deals for assigned users."""
@@ -84,9 +120,16 @@ class ToolHandlers:
         if isinstance(deals, dict) and "error" in deals:
             return deals
 
+        enriched = []
+        if isinstance(deals, list):
+            for d in deals[:50]:
+                d = dict(d)
+                d["card_url"] = client.deal_url(d.get("ID"))
+                enriched.append(d)
+
         return {
-            "count": len(deals) if isinstance(deals, list) else 0,
-            "deals": deals[:50] if isinstance(deals, list) else []
+            "count": len(enriched),
+            "deals": enriched,
         }
 
     async def get_deal_details(self, params: Dict[str, Any], user_context: Dict[str, Any]) -> Dict[str, Any]:
@@ -101,6 +144,10 @@ class ToolHandlers:
 
         if isinstance(deal, dict) and "error" in deal:
             return deal
+
+        if isinstance(deal, dict) and deal.get("ID"):
+            deal = dict(deal)
+            deal["card_url"] = client.deal_url(deal["ID"])
 
         return {"deal": deal}
 
@@ -127,9 +174,16 @@ class ToolHandlers:
         if isinstance(leads, dict) and "error" in leads:
             return leads
 
+        enriched = []
+        if isinstance(leads, list):
+            for l in leads[:50]:
+                l = dict(l)
+                l["card_url"] = client.lead_url(l.get("ID"))
+                enriched.append(l)
+
         return {
-            "count": len(leads) if isinstance(leads, list) else 0,
-            "leads": leads[:50] if isinstance(leads, list) else []
+            "count": len(enriched),
+            "leads": enriched,
         }
 
     async def search_contacts_or_companies(self, params: Dict[str, Any], user_context: Dict[str, Any]) -> Dict[str, Any]:
