@@ -22,6 +22,11 @@ class Settings(BaseSettings):
     deepseek_base_url: str = "https://api.deepseek.com"
     deepseek_model: str = "deepseek-chat"
 
+    # Yandex Metrika (optional). Token from oauth.yandex.ru with metrika:read scope.
+    metrika_oauth_token: str = ""
+    metrika_counter_id: str = ""
+    metrika_base_url: str = "https://api-metrika.yandex.net"
+
     # Which provider to use for LLM calls: "kie" or "deepseek"
     llm_provider: str = "kie"
 

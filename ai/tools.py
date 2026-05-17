@@ -254,6 +254,50 @@ def get_tools_definitions():
             }
         },
         {
+            "name": "metrika_traffic_summary",
+            "description": (
+                "Получить общие показатели трафика сайта из Яндекс.Метрики за период: "
+                "визиты, уникальные посетители, просмотры, % отказов, глубина просмотра, "
+                "среднее время на сайте. ИСПОЛЬЗУЙ для вопросов 'сколько визитов', "
+                "'посещаемость сайта', 'отказы', 'трафик за неделю/месяц'."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "date_from": {"type": "string", "description": "Начало периода YYYY-MM-DD"},
+                    "date_to": {"type": "string", "description": "Конец периода YYYY-MM-DD (включительно)"}
+                },
+                "required": ["date_from", "date_to"]
+            }
+        },
+        {
+            "name": "metrika_traffic_by_source",
+            "description": (
+                "Разбивка трафика сайта из Яндекс.Метрики по источникам: UTM-метки или "
+                "канал (search/ad/direct/social/referral). Для каждого источника — визиты, "
+                "уников и % отказов. ИСПОЛЬЗУЙ для 'топ источников трафика', "
+                "'откуда приходят посетители', 'какая UTM-кампания лучшая'. "
+                "Для связки CRM-лиды vs трафик — сначала вызови этот, потом get_leads с "
+                "тем же периодом и сопоставь по UTM_SOURCE/UTM_CAMPAIGN."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "date_from": {"type": "string", "description": "Начало периода YYYY-MM-DD"},
+                    "date_to": {"type": "string", "description": "Конец периода YYYY-MM-DD"},
+                    "breakdown": {
+                        "type": "string",
+                        "description": (
+                            "По чему разбивать: utm_source (по умолчанию), utm_medium, "
+                            "utm_campaign, utm_content, utm_term, channel (общий канал)."
+                        )
+                    },
+                    "limit": {"type": "integer", "description": "Сколько строк показать (по умолчанию 20, макс 50)"}
+                },
+                "required": ["date_from", "date_to"]
+            }
+        },
+        {
             "name": "get_recent_activities",
             "description": "Последние активности (звонки, встречи, задачи). Используй для 'что было сделано на этой неделе', 'последние звонки'.",
             "input_schema": {

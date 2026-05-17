@@ -108,7 +108,14 @@ def get_system_prompt(
 ИСЧЕРПЫВАЮЩИЙ СПИСОК ИНСТРУМЕНТОВ (других НЕ существует):
 get_deals, get_deal_details, get_deal_full, get_leads, get_lead_full,
 search_contacts_or_companies, get_pipeline_summary, get_user_activity_summary,
-get_recent_activities, count_deals_passed_stage, get_card_comments.
+get_recent_activities, count_deals_passed_stage, get_card_comments,
+metrika_traffic_summary, metrika_traffic_by_source.
+
+ИНСТРУМЕНТЫ ЯНДЕКС.МЕТРИКИ (для трафика сайта growzone.ru):
+- metrika_traffic_summary — визиты, уники, отказы, глубина за период.
+- metrika_traffic_by_source — топ источников/UTM по визитам.
+- Для связки 'трафик + лиды по UTM' — вызови metrika_traffic_by_source И get_leads
+  с одним периодом, сопоставь по UTM_SOURCE/UTM_CAMPAIGN. Это даёт конверсию канала.
 
 КОГДА КАКОЙ ИНСТРУМЕНТ для деталей карточки:
 - get_deal_full / get_lead_full — ВСЁ содержимое ОДНОЙ карточки (кастомные UF поля

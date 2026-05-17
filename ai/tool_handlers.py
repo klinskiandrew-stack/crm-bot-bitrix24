@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from typing import Dict, Any, List
 import structlog
 from b24.client import Bitrix24Client
+from metrika.client import metrika_client
 
 logger = structlog.get_logger()
 
@@ -62,6 +63,10 @@ class ToolHandlers:
                 return await self.get_deal_full(tool_input, user_context)
             elif tool_name == "get_card_comments":
                 return await self.get_card_comments(tool_input, user_context)
+            elif tool_name == "metrika_traffic_summary":
+                return await self.metrika_traffic_summary(tool_input, user_context)
+            elif tool_name == "metrika_traffic_by_source":
+                return await self.metrika_traffic_by_source(tool_input, user_context)
             else:
                 return {"error": f"Unknown tool: {tool_name}"}
         except Exception as e:
@@ -467,6 +472,44 @@ class ToolHandlers:
                 for c in comments
             ],
         }
+
+
+    # ---------- Yandex Metrika tools ----------
+
+    async def metrika_traffic_summary(self, params: Dict[str, Any], user_context: Dict[str, Any]) -> Dict[str, Any]:
+        """Visits/users/bounce rate/depth for a date range."""
+        err = _validate_params(params, date_keys=("date_from", "date_to"), stage_key="not_used")
+        if err:
+            return err
+        date_from = params.get("date_from")
+        date_to = params.get("date_to")
+        if not date_from or not date_to:
+            return {"error": "date_from и date_to обязательны (YYYY-MM-DD)"}
+        return await metrika_client.get_traffic_summary(date_from, date_to)
+
+    async def metrika_traffic_by_source(self, params: Dict[str, Any], user_context: Dict[str, Any]) -> Dict[str, Any]:
+        """Traffic breakdown by UTM source/medium/campaign or traffic channel."""
+        err = _validate_params(params, date_keys=("date_from", "date_to"), stage_key="not_used")
+        if err:
+            return err
+        date_from = params.get("date_from")
+        date_to = params.get("date_to")
+        breakdown = (params.get("breakdown") or "utm_source").lower()
+        limit = min(int(params.get("limit", 20)), 50)
+
+        dim_map = {
+            "utm_source":   "ym:s:UTMSource",
+            "utm_medium":   "ym:s:UTMMedium",
+            "utm_campaign": "ym:s:UTMCampaign",
+            "utm_content":  "ym:s:UTMContent",
+            "utm_term":     "ym:s:UTMTerm",
+            "channel":      "ym:s:lastTrafficSource",  # canonical: direct/search/ad/social/referral
+        }
+        dimension = dim_map.get(breakdown)
+        if not dimension:
+            return {"error": f"breakdown должен быть одним из: {', '.join(dim_map)}"}
+
+        return await metrika_client.get_traffic_by_source(date_from, date_to, dimension=dimension, limit=limit)
 
 
 # Global handlers instance
