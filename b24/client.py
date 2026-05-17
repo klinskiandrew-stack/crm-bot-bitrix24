@@ -24,10 +24,19 @@ def _day_after(date_str: str) -> str:
 
 
 class Bitrix24Client:
+    # entityTypeId mapping for crm.item.fields
+    ENTITY_TYPE_LEAD = 1
+    ENTITY_TYPE_DEAL = 2
+    ENTITY_TYPE_CONTACT = 3
+    ENTITY_TYPE_COMPANY = 4
+
     def __init__(self, webhook_url: str = None):
         self.webhook_url = webhook_url or settings.b24_webhook_url
         self.rate_limiter = RateLimiter(max_requests=2, time_window=1)
         self._session = None
+        # In-memory cache for UF field name maps (refreshed every 24h).
+        # Shape: {entity_type_id: {"map": {UF_CRM_X: "Имя"}, "expires": datetime}}
+        self._uf_meta_cache: Dict[int, Dict[str, Any]] = {}
 
     async def __aenter__(self):
         self._session = aiohttp.ClientSession()
@@ -41,6 +50,32 @@ class Bitrix24Client:
         """Ensure session is created."""
         if self._session is None:
             self._session = aiohttp.ClientSession()
+
+    async def _call_get(self, method: str, params: Dict[str, Any] = None) -> Dict[str, Any]:
+        """GET call — used for single-entity methods (crm.lead.get, crm.deal.get)
+        where POST+JSON sometimes fails with 'ID is not defined or invalid'.
+        Supports nested params via Bitrix24's filter[KEY]=value notation."""
+        await self.rate_limiter.acquire()
+        await self._ensure_session()
+
+        url = f"{self.webhook_url}{method}"
+        try:
+            async with self._session.get(url, params=params or {}, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+                text = await resp.text()
+                try:
+                    response = json.loads(text)
+                except json.JSONDecodeError:
+                    logger.error("Bitrix24 non-JSON response", method=method, status=resp.status, body=text[:200])
+                    return {"error": f"Non-JSON response (status={resp.status})"}
+
+                if "error" in response or "error_description" in response:
+                    err = response.get("error_description") or response.get("error", "Unknown error")
+                    logger.error("Bitrix24 API error", method=method, error=err)
+                    return {"error": err}
+                return response
+        except Exception as e:
+            logger.error("Bitrix24 GET failed", method=method, error=str(e))
+            return {"error": str(e)}
 
     async def _call(
         self,
@@ -133,8 +168,9 @@ class Bitrix24Client:
         return await self._paginate("crm.deal.list", params, limit=limit, max_items=limit)
 
     async def get_deal(self, deal_id: int) -> Dict[str, Any]:
-        """Get single deal details."""
-        response = await self._call("crm.deal.get", {"id": deal_id})
+        """Get single deal details. Uses GET because POST+JSON sometimes
+        returns 'ID is not defined or invalid' for crm.deal.get."""
+        response = await self._call_get("crm.deal.get", {"ID": deal_id})
         if "error" in response:
             return response
         return response.get("result", {}) or {}
@@ -170,8 +206,8 @@ class Bitrix24Client:
         return await self._paginate("crm.lead.list", params, limit=limit, max_items=limit)
 
     async def get_lead(self, lead_id: int) -> Dict[str, Any]:
-        """Get single lead details."""
-        response = await self._call("crm.lead.get", {"id": lead_id})
+        """Get single lead details. Uses GET — see get_deal note."""
+        response = await self._call_get("crm.lead.get", {"ID": lead_id})
         if "error" in response:
             return response
         return response.get("result", {}) or {}
@@ -199,7 +235,7 @@ class Bitrix24Client:
 
     async def get_contact(self, contact_id: int) -> Dict[str, Any]:
         """Get contact details."""
-        response = await self._call("crm.contact.get", {"id": contact_id})
+        response = await self._call_get("crm.contact.get", {"ID": contact_id})
         if "error" in response:
             return response
         return response.get("result", {}) or {}
@@ -337,3 +373,96 @@ class Bitrix24Client:
     def lead_url(self, lead_id) -> str:
         """Build human-readable URL to a lead card in Bitrix24."""
         return f"{settings.b24_portal_url}/crm/lead/details/{lead_id}/"
+
+    # ---------- UF metadata + enrichment ----------
+
+    async def get_uf_name_map(self, entity_type_id: int) -> Dict[str, str]:
+        """Return {UF_CRM_X: 'Человеческое имя'} for given entity type.
+
+        Uses crm.item.fields with useOriginalUfNames=Y which (unlike
+        userfield.list) actually returns titles. Cached for 24 hours
+        in memory since field schemas rarely change.
+        """
+        cached = self._uf_meta_cache.get(entity_type_id)
+        if cached and cached["expires"] > datetime.utcnow():
+            return cached["map"]
+
+        response = await self._call_get(
+            "crm.item.fields",
+            {"entityTypeId": entity_type_id, "useOriginalUfNames": "Y"},
+        )
+        if "error" in response:
+            logger.warning("Failed to load UF metadata", entity_type_id=entity_type_id, error=response["error"])
+            return {}
+
+        fields = (response.get("result") or {}).get("fields") or {}
+        uf_map = {}
+        for code, meta in fields.items():
+            if not code.startswith("UF_"):
+                continue
+            title = meta.get("title") or meta.get("formLabel") or meta.get("listLabel") or ""
+            if title and title != code:
+                uf_map[code] = title
+
+        self._uf_meta_cache[entity_type_id] = {
+            "map": uf_map,
+            "expires": datetime.utcnow() + timedelta(hours=24),
+        }
+        logger.info("UF metadata loaded", entity_type_id=entity_type_id, count=len(uf_map))
+        return uf_map
+
+    async def enrich_with_uf_names(
+        self,
+        entity_type_id: int,
+        record: Dict[str, Any],
+        drop_empty: bool = True,
+    ) -> Dict[str, Any]:
+        """Rename UF_CRM_* keys to human titles, optionally drop empty UF fields.
+
+        Standard fields (TITLE, STAGE_ID, etc.) pass through unchanged. UF
+        fields that have no title in the map keep their technical code so
+        nothing is lost.
+        """
+        if not isinstance(record, dict):
+            return record
+
+        uf_map = await self.get_uf_name_map(entity_type_id)
+        result = {}
+        for key, value in record.items():
+            if key.startswith("UF_"):
+                if drop_empty and value in (None, "", [], 0, "0", False, "N"):
+                    continue
+                human = uf_map.get(key)
+                if human:
+                    result[human] = value
+                else:
+                    result[key] = value
+            else:
+                result[key] = value
+        return result
+
+    async def get_timeline_comments(
+        self,
+        entity_type: str,
+        entity_id: int,
+        limit: int = 20,
+    ) -> List[Dict[str, Any]]:
+        """Get manager comments from a CRM card's timeline.
+
+        entity_type: 'lead' / 'deal' / 'contact' / 'company'.
+        Returns list of {AUTHOR_ID, COMMENT, CREATED, FILES?} sorted DESC.
+        """
+        params = {
+            "filter": {
+                "ENTITY_TYPE": entity_type,
+                "ENTITY_ID": entity_id,
+            },
+            "order": {"CREATED": "DESC"},
+        }
+        response = await self._call("crm.timeline.comment.list", params)
+        if "error" in response:
+            return []
+        items = response.get("result", [])
+        if not isinstance(items, list):
+            return []
+        return items[:limit]

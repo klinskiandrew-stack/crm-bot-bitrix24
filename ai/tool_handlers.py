@@ -56,6 +56,12 @@ class ToolHandlers:
                 return await self.get_recent_activities(tool_input, user_context)
             elif tool_name == "count_deals_passed_stage":
                 return await self.count_deals_passed_stage(tool_input, user_context)
+            elif tool_name == "get_lead_full":
+                return await self.get_lead_full(tool_input, user_context)
+            elif tool_name == "get_deal_full":
+                return await self.get_deal_full(tool_input, user_context)
+            elif tool_name == "get_card_comments":
+                return await self.get_card_comments(tool_input, user_context)
             else:
                 return {"error": f"Unknown tool: {tool_name}"}
         except Exception as e:
@@ -376,6 +382,90 @@ class ToolHandlers:
             "count": len(activities) if isinstance(activities, list) else 0,
             "activities": activities[:20] if isinstance(activities, list) else [],
             "period_days": days_back
+        }
+
+    # ---------- New tools: full card content ----------
+
+    async def get_lead_full(self, params: Dict[str, Any], user_context: Dict[str, Any]) -> Dict[str, Any]:
+        """Get a single lead with ALL fields (incl. custom UF_*) and comments
+        from inside the card. Custom field codes are replaced with human names."""
+        lead_id = params.get("lead_id")
+        if not lead_id:
+            return {"error": "lead_id is required"}
+
+        client = await self._get_client()
+        lead = await client.get_lead(int(lead_id))
+        if isinstance(lead, dict) and "error" in lead:
+            return lead
+        if not lead:
+            return {"error": f"Лид #{lead_id} не найден"}
+
+        # Drop empty UF, rename to human names
+        enriched = await client.enrich_with_uf_names(client.ENTITY_TYPE_LEAD, lead, drop_empty=True)
+        enriched["card_url"] = client.lead_url(lead_id)
+
+        # Manager comments inside the card
+        comments = await client.get_timeline_comments("lead", int(lead_id), limit=15)
+        enriched["timeline_comments"] = [
+            {
+                "author_id": c.get("AUTHOR_ID"),
+                "created": c.get("CREATED"),
+                "text": c.get("COMMENT", "")[:1000],
+            }
+            for c in comments
+        ]
+        return {"lead": enriched}
+
+    async def get_deal_full(self, params: Dict[str, Any], user_context: Dict[str, Any]) -> Dict[str, Any]:
+        """Get a single deal with ALL fields (incl. custom UF_*) and timeline comments."""
+        deal_id = params.get("deal_id")
+        if not deal_id:
+            return {"error": "deal_id is required"}
+
+        client = await self._get_client()
+        deal = await client.get_deal(int(deal_id))
+        if isinstance(deal, dict) and "error" in deal:
+            return deal
+        if not deal:
+            return {"error": f"Сделка #{deal_id} не найдена"}
+
+        enriched = await client.enrich_with_uf_names(client.ENTITY_TYPE_DEAL, deal, drop_empty=True)
+        enriched["card_url"] = client.deal_url(deal_id)
+
+        comments = await client.get_timeline_comments("deal", int(deal_id), limit=15)
+        enriched["timeline_comments"] = [
+            {
+                "author_id": c.get("AUTHOR_ID"),
+                "created": c.get("CREATED"),
+                "text": c.get("COMMENT", "")[:1000],
+            }
+            for c in comments
+        ]
+        return {"deal": enriched}
+
+    async def get_card_comments(self, params: Dict[str, Any], user_context: Dict[str, Any]) -> Dict[str, Any]:
+        """Get manager-written comments from a lead or deal card timeline."""
+        entity_type = (params.get("entity_type") or "").lower()
+        entity_id = params.get("entity_id")
+        if entity_type not in ("lead", "deal"):
+            return {"error": "entity_type должен быть 'lead' или 'deal'"}
+        if not entity_id:
+            return {"error": "entity_id обязателен"}
+
+        client = await self._get_client()
+        comments = await client.get_timeline_comments(entity_type, int(entity_id), limit=20)
+        return {
+            "entity_type": entity_type,
+            "entity_id": entity_id,
+            "count": len(comments),
+            "comments": [
+                {
+                    "author_id": c.get("AUTHOR_ID"),
+                    "created": c.get("CREATED"),
+                    "text": c.get("COMMENT", "")[:2000],
+                }
+                for c in comments
+            ],
         }
 
 
