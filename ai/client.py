@@ -46,15 +46,20 @@ class KieAIClient:
 
             duration_ms = int((time.time() - start_time) * 1000)
 
+            # Build usage info with proper null checking
+            usage_info = {}
+            if response.usage:
+                usage_info = {
+                    "input_tokens": getattr(response.usage, "input_tokens", 0),
+                    "output_tokens": getattr(response.usage, "output_tokens", 0),
+                    "cache_creation_input_tokens": getattr(response.usage, "cache_creation_input_tokens", 0),
+                    "cache_read_input_tokens": getattr(response.usage, "cache_read_input_tokens", 0),
+                }
+
             result = {
                 "content": response.content,
                 "stop_reason": response.stop_reason,
-                "usage": {
-                    "input_tokens": response.usage.input_tokens,
-                    "output_tokens": response.usage.output_tokens,
-                    "cache_creation_input_tokens": getattr(response.usage, "cache_creation_input_tokens", 0),
-                    "cache_read_input_tokens": getattr(response.usage, "cache_read_input_tokens", 0),
-                },
+                "usage": usage_info,
                 "model": response.model,
                 "duration_ms": duration_ms,
             }
