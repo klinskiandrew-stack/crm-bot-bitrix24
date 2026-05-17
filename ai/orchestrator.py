@@ -3,6 +3,7 @@ import json
 import time
 import structlog
 from ai.client import KieAIClient
+from ai.deepseek_client import DeepSeekClient
 from ai.router import router
 from ai.tools import get_tools_definitions
 from ai.tool_handlers import handlers
@@ -11,11 +12,23 @@ from config import settings
 logger = structlog.get_logger()
 
 
+def _make_client():
+    """Choose LLM client per settings.llm_provider ('kie' default, 'deepseek')."""
+    provider = (settings.llm_provider or "kie").lower()
+    if provider == "deepseek":
+        if not settings.deepseek_api_key:
+            raise RuntimeError("llm_provider=deepseek but DEEPSEEK_API_KEY is empty")
+        logger.info("LLM provider initialized", provider="deepseek", model=settings.deepseek_model)
+        return DeepSeekClient()
+    logger.info("LLM provider initialized", provider="kie")
+    return KieAIClient()
+
+
 class Orchestrator:
     """Manage conversation with Claude including function calling."""
 
     def __init__(self):
-        self.client = KieAIClient()
+        self.client = _make_client()
         self.max_iterations = settings.max_iterations
         self.max_input_tokens = settings.max_request_input_tokens
         self.max_credits = settings.max_request_credits

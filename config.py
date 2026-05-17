@@ -17,6 +17,14 @@ class Settings(BaseSettings):
     kie_base_url: str = "https://api.kie.ai/claude"
     kie_proxy_url: str = ""
 
+    # DeepSeek (optional, used when llm_provider=deepseek)
+    deepseek_api_key: str = ""
+    deepseek_base_url: str = "https://api.deepseek.com"
+    deepseek_model: str = "deepseek-chat"
+
+    # Which provider to use for LLM calls: "kie" or "deepseek"
+    llm_provider: str = "kie"
+
     # Database
     database_path: str = "./data/bot.sqlite"
 
