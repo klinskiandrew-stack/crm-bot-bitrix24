@@ -46,6 +46,16 @@ class KieAIClient:
 
             duration_ms = int((time.time() - start_time) * 1000)
 
+            logger.debug(
+                "Raw response from Kie.ai",
+                response_type=type(response).__name__,
+                has_content=hasattr(response, 'content'),
+                has_usage=hasattr(response, 'usage'),
+                content=str(response.content) if hasattr(response, 'content') else 'N/A',
+                usage=str(response.usage) if hasattr(response, 'usage') else 'N/A',
+                stop_reason=response.stop_reason if hasattr(response, 'stop_reason') else 'N/A'
+            )
+
             # Build usage info with proper null checking
             usage_info = {}
             if response.usage:
@@ -57,10 +67,10 @@ class KieAIClient:
                 }
 
             result = {
-                "content": response.content,
-                "stop_reason": response.stop_reason,
+                "content": response.content if hasattr(response, 'content') else [],
+                "stop_reason": response.stop_reason if hasattr(response, 'stop_reason') else None,
                 "usage": usage_info,
-                "model": response.model,
+                "model": response.model if hasattr(response, 'model') else model,
                 "duration_ms": duration_ms,
             }
 

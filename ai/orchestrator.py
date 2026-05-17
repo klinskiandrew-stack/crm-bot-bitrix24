@@ -75,6 +75,13 @@ class Orchestrator:
             # Handle both "end_turn" and None (both mean response is complete)
             if response["stop_reason"] in ("end_turn", None):
                 # Final response
+                logger.info(
+                    "Processing final response",
+                    content_count=len(response.get("content", [])),
+                    content_types=[type(b).__name__ for b in response.get("content", [])],
+                    content_str=str(response.get("content", []))[:200]
+                )
+
                 answer_block = next(
                     (block for block in response["content"] if hasattr(block, "text")),
                     None
@@ -133,9 +140,16 @@ class Orchestrator:
 
             else:
                 # Unknown stop_reason - try to extract answer and return
-                logger.warning("Unknown stop reason, treating as end_turn", stop_reason=response.get("stop_reason"), iteration=iteration)
+                logger.warning(
+                    "Unknown stop reason, treating as end_turn",
+                    stop_reason=response.get("stop_reason"),
+                    iteration=iteration,
+                    content_count=len(response.get("content", [])),
+                    response_keys=list(response.keys())
+                )
+
                 answer_block = next(
-                    (block for block in response["content"] if hasattr(block, "text")),
+                    (block for block in response.get("content", []) if hasattr(block, "text")),
                     None
                 )
                 answer = answer_block.text if answer_block else "Ошибка: нет ответа"
