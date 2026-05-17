@@ -1,0 +1,244 @@
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                                                                              ║
+║     🚀 РАЗВЕРТЫВАНИЕ НА TIMEWEB - ИНСТРУКЦИИ                                ║
+║                                                                              ║
+║     Telegram-бот для Bitrix24 CRM с ИИ (Ассистент Гроу)                    ║
+║                                                                              ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+
+📚 ДОКУМЕНТАЦИЯ
+════════════════════════════════════════════════════════════════════════════════
+
+1. QUICK_START_TIMEWEB.md
+   ⚡ Быстрый старт в 5 минут
+   → Прочитайте СНАЧАЛА
+
+2. DEPLOYMENT.md
+   📖 Подробное руководство развертывания
+   → Полная информация обо всех шагах
+
+3. DEPLOYMENT_CHECKLIST.md
+   ✅ Чек-лист подготовки и развертывания
+   → Убедитесь, что ничего не забыли
+
+4. README.md
+   📖 Общая информация о проекте
+
+
+🔑 ЧТО ПОДГОТОВИТЬ ПЕРЕД РАЗВЕРТЫВАНИЕМ
+════════════════════════════════════════════════════════════════════════════════
+
+TELEGRAM:
+  □ TELEGRAM_BOT_TOKEN        - от @BotFather
+  □ ADMIN_TELEGRAM_ID         - ваш Telegram ID (от @userinfobot)
+
+BITRIX24:
+  □ B24_WEBHOOK_URL           - из админ-панели портала
+                               Формат: https://ваш-портал.bitrix24.ru/rest/1/token/
+
+KIE.AI:
+  □ KIE_API_KEY              - из личного кабинета kie.ai
+
+TIMEWEB:
+  □ SSH доступ к серверу (IP адрес)
+  □ Доступ администратора (root)
+
+
+⚡ БЫСТРЫЙ СТАРТ (скопируйте поочередно)
+════════════════════════════════════════════════════════════════════════════════
+
+# 1. Подключиться к серверу
+ssh root@YOUR_SERVER_IP
+
+# 2. Установить ПО
+apt update && apt install -y python3.11 python3.11-venv git sqlite3
+useradd -m -s /bin/bash crmbot
+su - crmbot
+
+# 3. Клонировать проект
+cd /opt
+git clone <REPO_URL> crm-bot
+cd crm-bot
+
+# 4. Создать окружение
+python3.11 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+mkdir -p data logs
+
+# 5. Создать .env файл (заполните переменные!)
+cat > .env << 'EOF'
+TELEGRAM_BOT_TOKEN=ВАШ_ТОКЕН
+ADMIN_TELEGRAM_ID=ВАШ_ID
+B24_WEBHOOK_URL=https://ваш-портал.bitrix24.ru/rest/1/token/
+KIE_API_KEY=ВАШ_KIE_API_KEY
+KIE_BASE_URL=https://api.kie.ai/claude/v1
+DATABASE_PATH=./data/bot.sqlite
+LOG_LEVEL=INFO
+EOF
+
+chmod 600 .env
+
+# 6. Инициализировать БД
+python3 scripts/init_db.py
+
+# 7. Протестировать локально
+python3 main.py
+# (Ctrl+C для выхода если всё OK)
+
+# 8. Создать systemd сервис
+exit  # выйти от crmbot
+
+sudo bash -c 'cat > /etc/systemd/system/crm-bot.service << EOF
+[Unit]
+Description=CRM Bot
+After=network.target
+
+[Service]
+Type=simple
+User=crmbot
+WorkingDirectory=/opt/crm-bot
+Environment="PATH=/opt/crm-bot/venv/bin"
+ExecStart=/opt/crm-bot/venv/bin/python3 /opt/crm-bot/main.py
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=crm-bot
+
+[Install]
+WantedBy=multi-user.target
+EOF'
+
+sudo systemctl daemon-reload
+sudo systemctl enable crm-bot
+sudo systemctl start crm-bot
+
+# 9. Проверить статус
+sudo systemctl status crm-bot
+
+# 10. Просмотреть логи
+sudo journalctl -u crm-bot -f
+
+
+🧪 ПРОВЕРКА РАБОТОСПОСОБНОСТИ
+════════════════════════════════════════════════════════════════════════════════
+
+1. Напишите боту в Telegram:
+   - Добавьте бота в групповой чат
+   - Упомяните его: @bot_username сколько сделок в работе?
+   - Убедитесь, что получили ответ
+
+2. Проверьте логи:
+   sudo journalctl -u crm-bot -f
+
+3. Посмотрите статистику:
+   cd /opt/crm-bot
+   source venv/bin/activate
+   python3 scripts/healthcheck.py
+
+
+📊 КОМАНДЫ ДЛЯ УПРАВЛЕНИЯ
+════════════════════════════════════════════════════════════════════════════════
+
+# Просмотр логов (реал-тайм)
+sudo journalctl -u crm-bot -f
+
+# Только ошибки
+sudo journalctl -u crm-bot | grep -i error | tail -20
+
+# Статус
+sudo systemctl status crm-bot
+
+# Перезагрузка
+sudo systemctl restart crm-bot
+
+# Остановка
+sudo systemctl stop crm-bot
+
+# Размер БД
+du -h /opt/crm-bot/data/bot.sqlite
+
+# Бэкап
+cd /opt/crm-bot && cp data/bot.sqlite backup_$(date +%Y%m%d_%H%M%S).db
+
+
+⚠️  ЕСЛИ ЧТО-ТО НЕ РАБОТАЕТ
+════════════════════════════════════════════════════════════════════════════════
+
+Бот не запускается:
+  1. Проверьте логи: sudo journalctl -u crm-bot -n 50
+  2. Проверьте .env: cat /opt/crm-bot/.env
+  3. Проверьте синтаксис: cd /opt/crm-bot && python3 -m py_compile main.py
+
+Нет ответов от бота:
+  1. Убедитесь, что бот добавлен в группу
+  2. Убедитесь, что сервис запущен: sudo systemctl status crm-bot
+  3. Проверьте доступ к Telegram: curl https://api.telegram.org/
+  4. Проверьте credentials в .env
+
+Медленная работа:
+  1. Проверьте размер БД: du -h /opt/crm-bot/data/bot.sqlite
+  2. Запустите healthcheck: cd /opt/crm-bot && source venv/bin/activate && python3 scripts/healthcheck.py
+  3. Очистите старые логи (> 90 дней)
+
+
+🔐 БЕЗОПАСНОСТЬ
+════════════════════════════════════════════════════════════════════════════════
+
+✓ .env файл:
+  - Права 600: ls -la .env (должно показать -rw------)
+  - НЕ коммитить в git
+  - Хранить в безопасности
+
+✓ Bitrix24 webhook:
+  - Дать только необходимые права
+  - Проверить IP-белый список
+
+✓ Kie.ai API key:
+  - Установить IP-белый список сервера Timeweb
+  - Ограничить лимиты по необходимости
+
+✓ Telegram bot:
+  - Проверить, что бот добавлен только в нужные группы
+  - Убедиться, что админ-ID установлен правильно
+
+
+📞 ПОДДЕРЖКА И ОТЛАДКА
+════════════════════════════════════════════════════════════════════════════════
+
+Логи помогут понять, что случилось:
+  sudo journalctl -u crm-bot --since "1 hour ago"
+
+Проверьте все три сервиса доступны:
+  curl -I https://api.telegram.org/
+  curl -I https://api.kie.ai/
+  curl -I https://YOUR-PORTAL.bitrix24.ru/
+
+В проекте есть healthcheck скрипт:
+  python3 scripts/healthcheck.py
+
+
+✅ УСПЕШНОЕ РАЗВЕРТЫВАНИЕ ОЗНАЧАЕТ:
+════════════════════════════════════════════════════════════════════════════════
+
+✓ Бот запущен (sudo systemctl status crm-bot)
+✓ При упоминании в группе бот отвечает
+✓ Логи не содержат критических ошибок
+✓ Данные записываются в audit_log
+✓ Сервис автоматически перезагружается
+
+
+🚀 ГОТОВО!
+════════════════════════════════════════════════════════════════════════════════
+
+Ваш бот работает на production! 🎉
+
+Дальше вы можете:
+1. Добавить больше партнеров
+2. Настроить прокси для Telegram (если нужно)
+3. Внедрить фазу 3 (prompt caching для экономии)
+4. Добавить партнёрский интерфейс (фаза 4)
+
+Удачи! 🚀
