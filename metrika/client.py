@@ -102,7 +102,8 @@ class MetrikaClient:
         })
         if "error" in data:
             return data
-        totals = (data.get("totals") or [[0, 0, 0, 0, 0, 0]])[0]
+        # Metrika totals is a flat list of floats: [visits, users, pageviews, ...]
+        totals = data.get("totals") or [0, 0, 0, 0, 0, 0]
         return {
             "date_from": date_from,
             "date_to": date_to,
@@ -151,7 +152,7 @@ class MetrikaClient:
                 "users": int(m[1] or 0),
                 "bounce_rate_pct": round(float(m[2] or 0), 1),
             })
-        totals = (data.get("totals") or [[0, 0, 0]])[0]
+        totals = data.get("totals") or [0, 0, 0]
         return {
             "date_from": date_from,
             "date_to": date_to,
