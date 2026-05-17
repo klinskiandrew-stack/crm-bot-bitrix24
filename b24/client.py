@@ -103,7 +103,11 @@ class Bitrix24Client:
         """Get deals for assigned users."""
         params = {
             "filter": {},
-            "select": ["*", "UF_*"]
+            "select": [
+                "ID", "TITLE", "STAGE_ID", "OPPORTUNITY", "CURRENCY_ID",
+                "CLOSED", "DATE_CREATE", "DATE_MODIFY", "ASSIGNED_BY_ID",
+                "CONTACT_ID", "COMPANY_ID", "TYPE_ID", "CATEGORY_ID"
+            ]
         }
 
         if assigned_by_ids:
@@ -133,7 +137,11 @@ class Bitrix24Client:
         """Get leads for assigned users."""
         params = {
             "filter": {},
-            "select": ["*", "UF_*"]
+            "select": [
+                "ID", "TITLE", "STATUS_ID", "OPPORTUNITY", "CURRENCY_ID",
+                "DATE_CREATE", "DATE_MODIFY", "ASSIGNED_BY_ID",
+                "NAME", "LAST_NAME", "COMPANY_TITLE", "SOURCE_ID"
+            ]
         }
 
         if assigned_by_ids:

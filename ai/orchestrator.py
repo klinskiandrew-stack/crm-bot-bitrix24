@@ -126,10 +126,25 @@ class Orchestrator:
                                 "content": f"Ошибка при выполнении инструмента: {str(e)}"
                             })
 
-                # Add Claude's response with tool_use blocks
+                # Convert SDK blocks to plain dicts for JSON-serialization
+                assistant_content = []
+                for block in response["content"]:
+                    if hasattr(block, "type") and block.type == "tool_use":
+                        assistant_content.append({
+                            "type": "tool_use",
+                            "id": block.id,
+                            "name": block.name,
+                            "input": block.input,
+                        })
+                    elif hasattr(block, "text"):
+                        assistant_content.append({
+                            "type": "text",
+                            "text": block.text,
+                        })
+
                 messages.append({
                     "role": "assistant",
-                    "content": response["content"]
+                    "content": assistant_content
                 })
 
                 # Add tool results
