@@ -56,7 +56,13 @@ class MetrikaClient:
         if cached and cached[0] > now:
             return cached[1]
 
-        params = {**params, "ids": self.counter_id}
+        params = {
+            "ids": self.counter_id,
+            "accuracy": "full",       # avoid sampling for CRM cross-reference accuracy
+            "attribution": "lastsign", # 'lastsign' = last significant source — Metrika default
+            "lang": "ru",
+            **params,
+        }
         url = f"{self.base_url}/stat/v1/data"
 
         try:
@@ -120,16 +126,18 @@ class MetrikaClient:
         self,
         date_from: str,
         date_to: str,
-        dimension: str = "ym:s:UTMSource",
+        dimension: str = "ym:s:lastUTMSource",
         limit: int = 20,
     ) -> Dict[str, Any]:
         """Traffic breakdown by a single dimension.
 
-        dimension options:
-          - ym:s:UTMSource / UTMMedium / UTMCampaign / UTMContent / UTMTerm
-          - ym:s:trafficSource (canonical channel: direct, search, ad, ...)
-          - ym:s:lastTrafficSource
-          - ym:s:goal<ID>Conversion (для целей)
+        Valid dimensions (UTM ones REQUIRE last/first prefix):
+          - ym:s:lastUTMSource / lastUTMMedium / lastUTMCampaign /
+            lastUTMContent / lastUTMTerm
+          - ym:s:firstUTMSource / firstUTMMedium / ...
+          - ym:s:trafficSource — canonical channel (direct/search/ad/...),
+            attribution model controlled by request 'attribution' param.
+          - ym:s:goal<ID>Conversion — goal conversions.
         """
         data = await self._query({
             "metrics": "ym:s:visits,ym:s:users,ym:s:bounceRate",
@@ -163,9 +171,10 @@ class MetrikaClient:
         }
 
     async def get_traffic_by_channel(self, date_from: str, date_to: str) -> Dict[str, Any]:
-        """Canonical traffic channels (direct/search/ad/social/referral)."""
+        """Canonical traffic channels (direct/search/ad/social/referral).
+        Attribution model is set globally in _query (lastsign by default)."""
         return await self.get_traffic_by_source(
-            date_from, date_to, dimension="ym:s:<attribution>TrafficSource"
+            date_from, date_to, dimension="ym:s:trafficSource"
         )
 
     async def get_goals_list(self) -> Dict[str, Any]:

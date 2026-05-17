@@ -497,13 +497,15 @@ class ToolHandlers:
         breakdown = (params.get("breakdown") or "utm_source").lower()
         limit = min(int(params.get("limit", 20)), 50)
 
+        # UTM dimensions in Metrika REQUIRE last/first prefix — bare
+        # ym:s:UTMSource returns 400 "Unknown dimension".
         dim_map = {
-            "utm_source":   "ym:s:UTMSource",
-            "utm_medium":   "ym:s:UTMMedium",
-            "utm_campaign": "ym:s:UTMCampaign",
-            "utm_content":  "ym:s:UTMContent",
-            "utm_term":     "ym:s:UTMTerm",
-            "channel":      "ym:s:lastTrafficSource",  # canonical: direct/search/ad/social/referral
+            "utm_source":   "ym:s:lastUTMSource",
+            "utm_medium":   "ym:s:lastUTMMedium",
+            "utm_campaign": "ym:s:lastUTMCampaign",
+            "utm_content":  "ym:s:lastUTMContent",
+            "utm_term":     "ym:s:lastUTMTerm",
+            "channel":      "ym:s:trafficSource",  # canonical: direct/search/ad/social/referral
         }
         dimension = dim_map.get(breakdown)
         if not dimension:
