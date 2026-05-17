@@ -72,7 +72,8 @@ class Orchestrator:
                 }
 
             # Check if Claude wants to use tools
-            if response["stop_reason"] == "end_turn":
+            # Handle both "end_turn" and None (both mean response is complete)
+            if response["stop_reason"] in ("end_turn", None):
                 # Final response
                 answer_block = next(
                     (block for block in response["content"] if hasattr(block, "text")),
@@ -87,7 +88,7 @@ class Orchestrator:
                     "tools_called": tools_called,
                     "usage": response.get("usage", {}),
                     "duration_ms": int((time.time() - start_time) * 1000),
-                    "stop_reason": "end_turn"
+                    "stop_reason": response.get("stop_reason", "end_turn")
                 }
 
             elif response["stop_reason"] == "tool_use":
@@ -131,8 +132,23 @@ class Orchestrator:
                 })
 
             else:
-                logger.warning("Unexpected stop reason", stop_reason=response["stop_reason"], iteration=iteration)
-                break
+                # Unknown stop_reason - try to extract answer and return
+                logger.warning("Unknown stop reason, treating as end_turn", stop_reason=response.get("stop_reason"), iteration=iteration)
+                answer_block = next(
+                    (block for block in response["content"] if hasattr(block, "text")),
+                    None
+                )
+                answer = answer_block.text if answer_block else "Ошибка: нет ответа"
+
+                return {
+                    "answer": answer,
+                    "model": model,
+                    "iterations": iteration,
+                    "tools_called": tools_called,
+                    "usage": response.get("usage", {}),
+                    "duration_ms": int((time.time() - start_time) * 1000),
+                    "stop_reason": response.get("stop_reason", "unknown")
+                }
 
         # Max iterations reached - try to get final response without tools
         logger.warning("Max iterations reached, requesting final response", iteration=iteration, tools_called=tools_called)
