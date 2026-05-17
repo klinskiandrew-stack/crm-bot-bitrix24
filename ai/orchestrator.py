@@ -1,4 +1,4 @@
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Callable, Awaitable
 import json
 import time
 import structlog
@@ -31,9 +31,24 @@ class Orchestrator:
         user_context: Dict[str, Any],
         system_prompt: str,
         history: List[Dict[str, Any]] = None,
+        progress_callback: Optional[Callable[[str, str], Awaitable[None]]] = None,
     ) -> Dict[str, Any]:
-        """Process user message and get response from Claude."""
+        """Process user message and get response from Claude.
+
+        progress_callback(stage, detail) is called at each phase change so
+        the caller can show 'thinking → fetching data → formatting' updates
+        to the user. Stages: 'thinking', 'tool', 'formatting'.
+        """
         start_time = time.time()
+
+        async def _emit(stage: str, detail: str = ""):
+            if progress_callback:
+                try:
+                    await progress_callback(stage, detail)
+                except Exception as e:
+                    logger.warning("Progress callback failed", error=str(e))
+
+        await _emit("thinking", "")
 
         messages = history or []
         messages.append({
@@ -112,6 +127,7 @@ class Orchestrator:
             # Check if Claude wants to use tools
             # Handle both "end_turn" and None (both mean response is complete)
             if response["stop_reason"] in ("end_turn", None):
+                await _emit("formatting", "")
                 # Final response
                 logger.info(
                     "Processing final response",
@@ -147,6 +163,7 @@ class Orchestrator:
                         tool_input = block.input
 
                         tools_called.append(tool_name)
+                        await _emit("tool", tool_name)
 
                         try:
                             result = await handlers.handle_tool(tool_name, tool_input, user_context)
