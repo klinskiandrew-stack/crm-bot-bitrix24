@@ -6,7 +6,9 @@ tool_result, system as string) and DeepSeek's OpenAI-compatible format
 """
 
 import aiohttp
+import asyncio
 import json
+import random
 import time
 import structlog
 from typing import Any, Dict, List, Optional
@@ -14,6 +16,28 @@ from typing import Any, Dict, List, Optional
 from config import settings
 
 logger = structlog.get_logger()
+
+# Per-model pricing in USD per 1M tokens.
+# Source: https://api-docs.deepseek.com/quick_start/pricing
+# Cache HIT is ~50x cheaper than miss — billing was off by ~50x before
+# we split these out.
+PRICING = {
+    "deepseek-v4-flash": {"in_miss": 0.14,  "in_hit": 0.0028,   "out": 0.28},
+    "deepseek-v4-pro":   {"in_miss": 0.435, "in_hit": 0.003625, "out": 0.87},
+    # fallback for unknown / legacy aliases
+    "_default":          {"in_miss": 0.14,  "in_hit": 0.0028,   "out": 0.28},
+}
+
+# Map DeepSeek's finish_reason → orchestrator's stop_reason vocabulary.
+# Orchestrator only branches on 'end_turn' / 'tool_use' so the rest are
+# treated as terminal — but we log a warning on truncation/error states.
+STOP_REASON_MAP = {
+    "stop": "end_turn",
+    "tool_calls": "tool_use",
+    "length": "end_turn",            # truncated by max_tokens
+    "content_filter": "end_turn",
+    "insufficient_system_resource": "end_turn",
+}
 
 
 class _TextBlock:
@@ -60,6 +84,10 @@ def _messages_anthropic_to_openai(
     Anthropic structure we receive:
     - {role: 'user', content: 'text'}  OR  {role: 'user', content: [tool_result blocks]}
     - {role: 'assistant', content: 'text'}  OR  {role: 'assistant', content: [text/tool_use blocks]}
+
+    Also filters orphaned role:tool messages — if a session was truncated
+    mid-cycle, a tool_result may reference a tool_call_id that no longer
+    appears in the preceding assistant turn. DeepSeek rejects that with 400.
     """
     out: List[Dict[str, Any]] = []
     if system:
@@ -78,7 +106,6 @@ def _messages_anthropic_to_openai(
             continue
 
         if role == "assistant":
-            # Assistant message: may have text blocks and tool_use blocks.
             text_parts: List[str] = []
             tool_calls: List[Dict[str, Any]] = []
             for block in content:
@@ -101,14 +128,12 @@ def _messages_anthropic_to_openai(
             if text_parts:
                 msg["content"] = "\n".join(text_parts)
             else:
-                # OpenAI requires content to be present (can be null) when tool_calls used
                 msg["content"] = None
             if tool_calls:
                 msg["tool_calls"] = tool_calls
             out.append(msg)
 
         elif role == "user":
-            # User message: may carry tool_result blocks (from our orchestrator).
             tool_results: List[Dict[str, Any]] = []
             text_parts: List[str] = []
             for block in content:
@@ -125,7 +150,26 @@ def _messages_anthropic_to_openai(
                 out.append({"role": "user", "content": "\n".join(text_parts)})
             out.extend(tool_results)
 
-    return out
+    # Filter orphaned tool messages — DeepSeek 400 if tool_call_id has no
+    # preceding assistant tool_call. Collect valid ids from assistant turns,
+    # then drop any role:tool referencing an unknown id.
+    valid_ids = {
+        tc["id"]
+        for msg in out
+        if msg.get("role") == "assistant"
+        for tc in (msg.get("tool_calls") or [])
+        if tc.get("id")
+    }
+    filtered: List[Dict[str, Any]] = []
+    for msg in out:
+        if msg.get("role") == "tool" and msg.get("tool_call_id") not in valid_ids:
+            logger.debug(
+                "Dropping orphaned tool message",
+                tool_call_id=msg.get("tool_call_id"),
+            )
+            continue
+        filtered.append(msg)
+    return filtered
 
 
 def _block_attr(block: Any, name: str, default=None):
@@ -157,7 +201,7 @@ class DeepSeekClient:
         system: str = None,
         model: str = None,
         tools: List[Dict[str, Any]] = None,
-        max_tokens: int = 1024,
+        max_tokens: int = 2048,
         temperature: float = 0.7,
     ) -> Dict[str, Any]:
         """Send a message to DeepSeek, return Anthropic-style response dict."""
@@ -185,31 +229,58 @@ class DeepSeekClient:
             has_system=bool(system),
         )
 
-        try:
-            async with self._session.post(
-                f"{self.base_url}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {self.api_key}",
-                    "Content-Type": "application/json",
-                },
-                json=body,
-                timeout=aiohttp.ClientTimeout(total=90),
-            ) as resp:
-                # content_type=None: bypass aiohttp's strict mime check.
-                # CloudFront in front of DeepSeek occasionally returns
-                # application/octet-stream even on a valid JSON body.
-                text = await resp.text()
-                try:
-                    raw = json.loads(text)
-                except json.JSONDecodeError:
-                    logger.error("DeepSeek non-JSON response", status=resp.status, body=text[:300])
-                    raise RuntimeError(f"DeepSeek returned non-JSON (status={resp.status}): {text[:200]}")
+        # Retry on 429 (rate limit) and 5xx (transient). DeepSeek uses
+        # dynamic concurrency limits — 429 is a normal back-pressure signal,
+        # not a quota exhaustion.
+        raw = None
+        resp_status = None
+        last_err = None
+        for attempt in range(3):
+            try:
+                async with self._session.post(
+                    f"{self.base_url}/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {self.api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json=body,
+                    timeout=aiohttp.ClientTimeout(total=90),
+                ) as resp:
+                    resp_status = resp.status
+                    text = await resp.text()
+                    try:
+                        raw = json.loads(text)
+                    except json.JSONDecodeError:
+                        logger.error("DeepSeek non-JSON response", status=resp_status, body=text[:300])
+                        raise RuntimeError(f"DeepSeek returned non-JSON (status={resp_status}): {text[:200]}")
 
-                if resp.status != 200 or "error" in raw:
+                if resp_status == 429 or 500 <= resp_status < 600:
+                    last_err = f"DeepSeek API {resp_status}: {str(raw)[:200]}"
+                    if attempt < 2:
+                        delay = (2 ** attempt) + random.random() * 0.5
+                        logger.warning("DeepSeek transient error, retrying", attempt=attempt, status=resp_status, delay=delay)
+                        await asyncio.sleep(delay)
+                        continue
+
+                if resp_status != 200 or "error" in raw:
                     msg = (raw.get("error") or {}).get("message") if isinstance(raw.get("error"), dict) else raw
-                    logger.error("DeepSeek API error", status=resp.status, response=str(raw)[:300])
-                    raise RuntimeError(f"DeepSeek API {resp.status}: {msg}")
+                    logger.error("DeepSeek API error", status=resp_status, response=str(raw)[:300])
+                    raise RuntimeError(f"DeepSeek API {resp_status}: {msg}")
 
+                break  # success
+            except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                last_err = str(e)
+                if attempt < 2:
+                    delay = (2 ** attempt) + random.random() * 0.5
+                    logger.warning("DeepSeek network error, retrying", attempt=attempt, error=str(e), delay=delay)
+                    await asyncio.sleep(delay)
+                    continue
+                raise
+
+        if raw is None:
+            raise RuntimeError(f"DeepSeek failed after retries: {last_err}")
+
+        try:
             duration_ms = int((time.time() - start_time) * 1000)
             choice = raw["choices"][0]
             msg = choice["message"]
@@ -231,23 +302,52 @@ class DeepSeekClient:
                     tool_input=args,
                 ))
 
-            stop_reason = "tool_use" if finish_reason == "tool_calls" else "end_turn"
+            stop_reason = STOP_REASON_MAP.get(finish_reason, "end_turn")
+            if finish_reason in ("length", "insufficient_system_resource", "content_filter"):
+                logger.warning(
+                    "DeepSeek truncated/filtered response",
+                    finish_reason=finish_reason,
+                    model=model,
+                )
 
             usage = raw.get("usage", {})
+            cache_hit = usage.get("prompt_cache_hit_tokens") or 0
+            cache_miss = (
+                usage.get("prompt_cache_miss_tokens")
+                if usage.get("prompt_cache_miss_tokens") is not None
+                else max(0, usage.get("prompt_tokens", 0) - cache_hit)
+            )
+            out_tok = usage.get("completion_tokens", 0)
+
             usage_info = {
                 "input_tokens": usage.get("prompt_tokens", 0),
-                "output_tokens": usage.get("completion_tokens", 0),
+                "output_tokens": out_tok,
                 "cache_creation_input_tokens": 0,
-                "cache_read_input_tokens": (usage.get("prompt_cache_hit_tokens") or 0),
+                "cache_read_input_tokens": cache_hit,
+                "cache_miss_input_tokens": cache_miss,
             }
+
+            # Per-model pricing (cache hit ~50x cheaper than miss).
+            p = PRICING.get(model) or PRICING["_default"]
+            usd = (
+                cache_hit * p["in_hit"]
+                + cache_miss * p["in_miss"]
+                + out_tok * p["out"]
+            ) / 1_000_000
+            # Express in "credits" (Kie convention: 1 cr ≈ $0.005) for unified accounting.
+            credits_consumed = usd / 0.005
 
             logger.info(
                 "DeepSeek API call successful",
                 model=model,
                 stop_reason=stop_reason,
+                finish_reason=finish_reason,
                 input_tokens=usage_info["input_tokens"],
-                output_tokens=usage_info["output_tokens"],
-                cache_read=usage_info["cache_read_input_tokens"],
+                output_tokens=out_tok,
+                cache_hit=cache_hit,
+                cache_miss=cache_miss,
+                usd=round(usd, 6),
+                credits=round(credits_consumed, 4),
                 duration_ms=duration_ms,
             )
 
@@ -257,17 +357,12 @@ class DeepSeekClient:
                 "usage": usage_info,
                 "model": raw.get("model", model),
                 "duration_ms": duration_ms,
-                # DeepSeek charges in USD by tokens — convert to "credits" for unified accounting.
-                # Approx: $0.14/1M input, $0.28/1M output, 1cr = $0.005 (Kie convention).
-                "credits_consumed": (
-                    usage_info["input_tokens"] * 0.14 / 1_000_000
-                    + usage_info["output_tokens"] * 0.28 / 1_000_000
-                ) / 0.005,
+                "credits_consumed": credits_consumed,
             }
 
         except Exception as e:
             duration_ms = int((time.time() - start_time) * 1000)
-            logger.error("DeepSeek API call failed", error=str(e), duration_ms=duration_ms)
+            logger.error("DeepSeek response parse failed", error=str(e), duration_ms=duration_ms)
             raise
 
     async def set_default_model(self, model: str):
