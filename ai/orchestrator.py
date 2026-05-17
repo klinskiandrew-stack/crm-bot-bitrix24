@@ -15,7 +15,7 @@ class Orchestrator:
 
     def __init__(self):
         self.client = KieAIClient()
-        self.max_iterations = 10
+        self.max_iterations = 20
         self.tool_definitions = get_tools_definitions()
 
     async def get_tools_list(self) -> List[Dict[str, Any]]:
@@ -67,6 +67,7 @@ class Orchestrator:
                     "model": model,
                     "iterations": iteration,
                     "tools_called": tools_called,
+                    "usage": {},
                     "duration_ms": int((time.time() - start_time) * 1000)
                 }
 
@@ -84,7 +85,7 @@ class Orchestrator:
                     "model": model,
                     "iterations": iteration,
                     "tools_called": tools_called,
-                    "usage": response["usage"],
+                    "usage": response.get("usage", {}),
                     "duration_ms": int((time.time() - start_time) * 1000),
                     "stop_reason": "end_turn"
                 }
@@ -133,13 +134,36 @@ class Orchestrator:
                 logger.warning("Unexpected stop reason", stop_reason=response["stop_reason"], iteration=iteration)
                 break
 
-        # Max iterations reached
+        # Max iterations reached - try to get final response without tools
+        logger.warning("Max iterations reached, requesting final response", iteration=iteration, tools_called=tools_called)
+
+        # Request final response without tools
+        try:
+            final_response = await self.client.send_message(
+                messages=messages,
+                system=system_prompt,
+                model=model,
+                tools=None,  # No tools for final response
+                max_tokens=1024
+            )
+
+            answer_block = next(
+                (block for block in final_response["content"] if hasattr(block, "text")),
+                None
+            )
+            answer = answer_block.text if answer_block else "Ошибка: нет ответа"
+        except Exception as e:
+            logger.error("Failed to get final response", error=str(e))
+            answer = "Ошибка при получении финального ответа. Достигнут лимит операций."
+            final_response = {"usage": {}}
+
         return {
-            "answer": "Достигнут лимит итераций. Пожалуйста, уточните вопрос.",
+            "answer": answer,
             "error": "Max iterations reached",
             "model": model,
             "iterations": iteration,
             "tools_called": tools_called,
+            "usage": final_response.get("usage", {}),
             "duration_ms": int((time.time() - start_time) * 1000)
         }
 
