@@ -67,7 +67,8 @@ class ToolHandlers:
 
         Uses history (crm.stagehistory.list) so we count deals that were
         on the stage at any moment during the period, even if they've
-        since moved on or fallen out.
+        since moved on or fallen out. Enriches result with deal titles
+        and card URLs so Claude can render cards without extra calls.
         """
         err = _validate_params(params, date_keys=("date_from", "date_to"), stage_key="not_used")
         if err:
@@ -92,9 +93,40 @@ class ToolHandlers:
         if "error" in result:
             return result
 
-        # Enrich with card URLs for sample
-        result["sample_deal_urls"] = [client.deal_url(d) for d in result["unique_deal_ids"][:10]]
-        return result
+        # Fetch deal details (TITLE, STAGE_ID, OPPORTUNITY, etc.) for the unique IDs
+        # so Claude doesn't need a follow-up call to render cards.
+        deal_ids = result.get("unique_deal_ids", [])[:50]  # cap to avoid huge payloads
+        deals_brief = []
+        for deal_id in deal_ids:
+            try:
+                deal = await client.get_deal(deal_id)
+                if isinstance(deal, dict) and deal.get("ID"):
+                    deals_brief.append({
+                        "ID": deal["ID"],
+                        "TITLE": deal.get("TITLE", f"Сделка #{deal_id}"),
+                        "current_STAGE_ID": deal.get("STAGE_ID"),
+                        "OPPORTUNITY": deal.get("OPPORTUNITY"),
+                        "CURRENCY_ID": deal.get("CURRENCY_ID"),
+                        "ASSIGNED_BY_ID": deal.get("ASSIGNED_BY_ID"),
+                        "card_url": client.deal_url(deal_id),
+                    })
+            except Exception as e:
+                logger.warning("Failed to fetch deal detail", deal_id=deal_id, error=str(e))
+
+        return {
+            "stage_id": result["stage_id"],
+            "category_id": result["category_id"],
+            "date_from": result["date_from"],
+            "date_to": result["date_to"],
+            "total_transition_events": result["total_events"],
+            "unique_deal_count": result["unique_deal_count"],
+            "deals": deals_brief,
+            "note": (
+                "В deals — все уникальные сделки, побывавшие на стадии за период. "
+                "current_STAGE_ID показывает где они находятся СЕЙЧАС "
+                "(может отличаться от запрошенной стадии)."
+            ),
+        }
 
     async def get_deals(self, params: Dict[str, Any], user_context: Dict[str, Any]) -> Dict[str, Any]:
         """Get deals for assigned users."""
