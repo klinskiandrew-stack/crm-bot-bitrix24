@@ -88,14 +88,62 @@ async def _maybe_alert_admin_once(bot, spent: float):
 
 _MD_LINK_RE = re.compile(r"\[([^\]]+)\]\((https?://[^)\s]+)\)")
 
+# Matches a GFM-style markdown table: header row, separator row (with ---),
+# then 1+ data rows. All rows start and end with `|`.
+_MD_TABLE_RE = re.compile(
+    r"(?m)^[ \t]*(\|[^\n]+\|)[ \t]*\n"          # header
+    r"[ \t]*(\|[\s\-:|]+\|)[ \t]*\n"            # separator
+    r"((?:[ \t]*\|[^\n]+\|[ \t]*\n?)+)"          # data rows
+)
+
+
+def _split_table_row(row: str) -> list[str]:
+    """Split '| a | b | c |' -> ['a','b','c'], trimming whitespace."""
+    return [c.strip() for c in row.strip().strip("|").split("|")]
+
+
+def _table_to_bullets(match: re.Match) -> str:
+    """Convert markdown table to a bullet list.
+
+    Telegram doesn't render tables; LLM sometimes ignores the prompt and
+    emits one anyway. Each data row becomes:
+      `• <first cell> — <col2 header>: <val2> | <col3 header>: <val3>`
+    Markdown links inside cells stay as-is and are converted to HTML
+    later in the pipeline.
+    """
+    headers = _split_table_row(match.group(1))
+    data_rows_raw = match.group(3).strip().split("\n")
+    bullets = []
+    for raw in data_rows_raw:
+        cells = _split_table_row(raw)
+        if not cells or all(not c for c in cells):
+            continue
+        first = cells[0]
+        # Pair remaining cells with header labels (if available)
+        rest_parts = []
+        for i, cell in enumerate(cells[1:], start=1):
+            label = headers[i] if i < len(headers) else ""
+            if label:
+                rest_parts.append(f"{label}: {cell}")
+            else:
+                rest_parts.append(cell)
+        rest = " | ".join(rest_parts)
+        bullet = f"• {first}" + (f" — {rest}" if rest else "")
+        bullets.append(bullet)
+    return "\n".join(bullets) + "\n"
+
 
 def _markdown_to_telegram_html(text: str) -> str:
     """Convert Claude's basic Markdown to Telegram HTML.
 
-    Order matters: escape HTML special chars FIRST (so user data can't
-    break parsing), then re-inject our supported tags. Markdown links
-    [text](url) are extracted before escaping URL chars.
+    Order matters: convert tables first (they're multi-line so need raw
+    text), then extract links to placeholders, then HTML-escape, then
+    re-inject bold/code/links.
     """
+    # 1. Markdown tables -> bullet list (Telegram doesn't render tables)
+    text = _MD_TABLE_RE.sub(_table_to_bullets, text)
+
+    # 2. Stash markdown links before escape
     links = []
 
     def _stash(m):
