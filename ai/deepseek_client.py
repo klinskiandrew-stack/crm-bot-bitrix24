@@ -141,6 +141,9 @@ class DeepSeekClient:
     def __init__(self):
         self.api_key = settings.deepseek_api_key
         self.base_url = settings.deepseek_base_url.rstrip("/")
+        # Always sourced from settings — ignore orchestrator's set_default_model
+        # which feeds Anthropic-style names ('claude-sonnet-4-6') that DeepSeek
+        # rejects with 400.
         self.default_model = settings.deepseek_model
         self._session: Optional[aiohttp.ClientSession] = None
 
@@ -160,14 +163,10 @@ class DeepSeekClient:
         """Send a message to DeepSeek, return Anthropic-style response dict."""
         start_time = time.time()
         await self._ensure_session()
-        model = model or self.default_model
-
-        # NOTE: Auto-routing in router.py emits Anthropic model names like
-        # claude-sonnet-4-6 — those don't exist on DeepSeek. Fall back to our
-        # configured DeepSeek model whenever the requested model isn't one
-        # of theirs.
-        if not model.startswith("deepseek"):
-            model = self.default_model
+        # Always force the configured DeepSeek model. The orchestrator's
+        # router emits Anthropic names ('claude-sonnet-4-6') which DeepSeek
+        # rejects with 400 — those names are meaningless here.
+        model = settings.deepseek_model
 
         body = {
             "model": model,
@@ -272,5 +271,6 @@ class DeepSeekClient:
             raise
 
     async def set_default_model(self, model: str):
-        self.default_model = model
-        logger.info("DeepSeek default model updated", model=model)
+        # No-op: orchestrator may feed Anthropic-style names; we always
+        # use settings.deepseek_model in send_message.
+        return
