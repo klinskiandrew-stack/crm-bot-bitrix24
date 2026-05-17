@@ -13,7 +13,7 @@ class Settings(BaseSettings):
 
     # Kie.ai
     kie_api_key: str
-    kie_base_url: str = "https://api.kie.ai/claude/v1"
+    kie_base_url: str = "https://api.kie.ai/claude"
     kie_proxy_url: str = ""
 
     # Database
