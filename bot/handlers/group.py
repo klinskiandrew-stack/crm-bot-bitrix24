@@ -1,6 +1,9 @@
 from aiogram import Router, types, F
+from aiogram.enums import ParseMode
 from aiogram.types import User
+import html
 import json
+import re
 import time
 import structlog
 from db.repositories import audit as audit_repo, sessions as sessions_repo
@@ -11,6 +14,23 @@ logger = structlog.get_logger()
 
 router = Router()
 orchestrator = Orchestrator()
+
+
+def _markdown_to_telegram_html(text: str) -> str:
+    """Convert Claude's basic Markdown to Telegram HTML.
+
+    Claude tends to emit **bold** and *italic*; Telegram doesn't render
+    those without parse_mode. We escape everything as HTML first, then
+    re-introduce supported tags.
+    """
+    safe = html.escape(text, quote=False)
+    # **bold** -> <b>bold</b>
+    safe = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", safe, flags=re.DOTALL)
+    # __bold__ -> <b>bold</b>
+    safe = re.sub(r"__(.+?)__", r"<b>\1</b>", safe, flags=re.DOTALL)
+    # `code` -> <code>code</code>
+    safe = re.sub(r"`([^`\n]+)`", r"<code>\1</code>", safe)
+    return safe
 
 
 @router.message(F.entities)
@@ -94,8 +114,13 @@ async def handle_mention(message: types.Message, user_context: dict = None):
         new_history = new_history[-20:]  # Keep last 20 messages
         await sessions_repo.save_session(user_id, chat_id, new_history)
 
-        # Send response
-        await message.reply(answer[:4096])  # Telegram limit
+        # Send response with HTML formatting; fall back to plain text if parser chokes
+        formatted = _markdown_to_telegram_html(answer)[:4096]
+        try:
+            await message.reply(formatted, parse_mode=ParseMode.HTML)
+        except Exception as send_err:
+            logger.warning("HTML send failed, falling back to plain", error=str(send_err))
+            await message.reply(answer[:4096])
 
         logger.info(
             "Group message processed",
