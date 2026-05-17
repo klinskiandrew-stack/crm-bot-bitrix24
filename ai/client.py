@@ -42,7 +42,26 @@ class KieAIClient:
             if tools:
                 kwargs["tools"] = tools
 
+            logger.debug(
+                "Sending request to Kie.ai",
+                model=model,
+                system_prompt_len=len(system) if system else 0,
+                messages_count=len(messages),
+                tools_count=len(tools) if tools else 0,
+                has_system=bool(system),
+                first_message_role=messages[0].get("role") if messages else None
+            )
+
             response = await self.client.messages.create(**kwargs)
+
+            logger.debug(
+                "Received response from Kie.ai",
+                response_model=response.model,
+                response_type=type(response).__name__,
+                has_content=bool(response.content),
+                content_count=len(response.content) if hasattr(response, 'content') else 0,
+                stop_reason=response.stop_reason if hasattr(response, 'stop_reason') else 'N/A'
+            )
 
             duration_ms = int((time.time() - start_time) * 1000)
 
