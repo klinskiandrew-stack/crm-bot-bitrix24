@@ -15,7 +15,7 @@ class Orchestrator:
 
     def __init__(self):
         self.client = KieAIClient()
-        self.max_iterations = 20
+        self.max_iterations = 5
         self.tool_definitions = get_tools_definitions()
 
     async def get_tools_list(self) -> List[Dict[str, Any]]:

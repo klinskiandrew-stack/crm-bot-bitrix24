@@ -31,28 +31,26 @@ class Bitrix24Client:
         self,
         method: str,
         params: Dict[str, Any] = None,
-        limit: int = 50,
         start: int = 0
     ) -> Dict[str, Any]:
-        """Call Bitrix24 API method with rate limiting."""
+        """Call Bitrix24 API method with rate limiting. Returns full response dict."""
         await self.rate_limiter.acquire()
         await self._ensure_session()
 
         url = f"{self.webhook_url}{method}.json"
-        data = params or {}
+        data = dict(params or {})
         data["start"] = start
-        data["limit"] = limit
 
         try:
             async with self._session.post(url, json=data) as resp:
                 response = await resp.json()
 
-                if not response.get("result"):
-                    error_msg = response.get("error_description", "Unknown error")
-                    logger.error("Bitrix24 API error", method=method, error=error_msg)
+                if "error" in response or "error_description" in response:
+                    error_msg = response.get("error_description") or response.get("error", "Unknown error")
+                    logger.error("Bitrix24 API error", method=method, error=error_msg, response=str(response)[:300])
                     return {"error": error_msg}
 
-                return response.get("result", {})
+                return response
         except Exception as e:
             logger.error("Bitrix24 request failed", method=method, error=str(e))
             return {"error": str(e)}
@@ -64,31 +62,27 @@ class Bitrix24Client:
         limit: int = 50,
         max_items: int = 500
     ) -> List[Dict[str, Any]]:
-        """Paginate through API results."""
+        """Paginate using Bitrix24 'next' field. Page size is always 50."""
         all_items = []
         start = 0
+        PAGE_SIZE = 50
 
         while len(all_items) < max_items:
-            result = await self._call(method, params, limit=limit, start=start)
+            response = await self._call(method, params, start=start)
 
-            if isinstance(result, dict) and "error" in result:
+            if isinstance(response, dict) and "error" in response:
+                return {"error": response["error"]}
+
+            batch = response.get("result", []) if isinstance(response, dict) else []
+            if not isinstance(batch, list):
                 break
 
-            if isinstance(result, list):
-                all_items.extend(result)
-            elif isinstance(result, dict) and "result" in result:
-                items = result["result"]
-                if isinstance(items, list):
-                    all_items.extend(items)
-                else:
-                    break
-            else:
-                break
+            all_items.extend(batch)
 
-            if len(result) < limit:
+            next_start = response.get("next") if isinstance(response, dict) else None
+            if next_start is None or len(batch) < PAGE_SIZE:
                 break
-
-            start += limit
+            start = next_start
 
         return all_items[:max_items]
 
@@ -104,9 +98,11 @@ class Bitrix24Client:
         params = {
             "filter": {},
             "select": [
-                "ID", "TITLE", "STAGE_ID", "OPPORTUNITY", "CURRENCY_ID",
-                "CLOSED", "DATE_CREATE", "DATE_MODIFY", "ASSIGNED_BY_ID",
-                "CONTACT_ID", "COMPANY_ID", "TYPE_ID", "CATEGORY_ID"
+                "ID", "TITLE", "STAGE_ID", "STAGE_SEMANTIC_ID", "IS_WON",
+                "OPPORTUNITY", "CURRENCY_ID", "CLOSED",
+                "DATE_CREATE", "BEGINDATE", "CLOSEDATE",
+                "ASSIGNED_BY_ID", "CONTACT_ID", "COMPANY_ID",
+                "TYPE_ID", "CATEGORY_ID"
             ]
         }
 
@@ -123,8 +119,10 @@ class Bitrix24Client:
 
     async def get_deal(self, deal_id: int) -> Dict[str, Any]:
         """Get single deal details."""
-        result = await self._call("crm.deal.get", {"id": deal_id})
-        return result if not isinstance(result, dict) or "error" not in result else {}
+        response = await self._call("crm.deal.get", {"id": deal_id})
+        if "error" in response:
+            return response
+        return response.get("result", {}) or {}
 
     async def get_leads(
         self,
@@ -138,7 +136,8 @@ class Bitrix24Client:
         params = {
             "filter": {},
             "select": [
-                "ID", "TITLE", "STATUS_ID", "OPPORTUNITY", "CURRENCY_ID",
+                "ID", "TITLE", "STATUS_ID", "STATUS_SEMANTIC_ID",
+                "OPPORTUNITY", "CURRENCY_ID",
                 "DATE_CREATE", "DATE_MODIFY", "ASSIGNED_BY_ID",
                 "NAME", "LAST_NAME", "COMPANY_TITLE", "SOURCE_ID"
             ]
@@ -157,8 +156,10 @@ class Bitrix24Client:
 
     async def get_lead(self, lead_id: int) -> Dict[str, Any]:
         """Get single lead details."""
-        result = await self._call("crm.lead.get", {"id": lead_id})
-        return result if not isinstance(result, dict) or "error" not in result else {}
+        response = await self._call("crm.lead.get", {"id": lead_id})
+        if "error" in response:
+            return response
+        return response.get("result", {}) or {}
 
     async def search_contacts(
         self,
@@ -166,10 +167,14 @@ class Bitrix24Client:
         assigned_by_ids: List[int],
         limit: int = 20
     ) -> List[Dict[str, Any]]:
-        """Search contacts by name/phone/email."""
+        """Search contacts by name (substring) + phone/email multifields."""
         params = {
-            "filter": {"NAME": query},
-            "select": ["*", "PHONE", "EMAIL"]
+            "filter": {"%NAME": query},
+            "select": [
+                "ID", "NAME", "LAST_NAME", "SECOND_NAME",
+                "COMPANY_TITLE", "POST", "ASSIGNED_BY_ID",
+                "DATE_CREATE", "PHONE", "EMAIL"
+            ]
         }
 
         if assigned_by_ids:
@@ -179,8 +184,10 @@ class Bitrix24Client:
 
     async def get_contact(self, contact_id: int) -> Dict[str, Any]:
         """Get contact details."""
-        result = await self._call("crm.contact.get", {"id": contact_id})
-        return result if not isinstance(result, dict) or "error" not in result else {}
+        response = await self._call("crm.contact.get", {"id": contact_id})
+        if "error" in response:
+            return response
+        return response.get("result", {}) or {}
 
     async def get_companies(
         self,
@@ -190,7 +197,10 @@ class Bitrix24Client:
         """Get companies."""
         params = {
             "filter": {},
-            "select": ["*"]
+            "select": [
+                "ID", "TITLE", "COMPANY_TYPE", "INDUSTRY", "REVENUE",
+                "CURRENCY_ID", "EMPLOYEES", "ASSIGNED_BY_ID", "DATE_CREATE"
+            ]
         }
 
         if assigned_by_ids:
@@ -202,6 +212,7 @@ class Bitrix24Client:
         self,
         assigned_by_ids: List[int],
         owner_id: int = None,
+        owner_type_id: int = None,
         date_from: str = None,
         date_to: str = None,
         limit: int = 50
@@ -209,14 +220,18 @@ class Bitrix24Client:
         """Get activities (tasks, calls, meetings)."""
         params = {
             "filter": {},
-            "select": ["*"]
+            "select": [
+                "ID", "SUBJECT", "TYPE_ID", "STATUS", "COMPLETED",
+                "RESPONSIBLE_ID", "OWNER_ID", "OWNER_TYPE_ID",
+                "CREATED", "DEADLINE", "DESCRIPTION"
+            ]
         }
 
         if assigned_by_ids:
             params["filter"]["RESPONSIBLE_ID"] = assigned_by_ids
-
-        if owner_id:
+        if owner_id and owner_type_id:
             params["filter"]["OWNER_ID"] = owner_id
+            params["filter"]["OWNER_TYPE_ID"] = owner_type_id
         if date_from:
             params["filter"][">=CREATED"] = date_from
         if date_to:
@@ -226,10 +241,18 @@ class Bitrix24Client:
 
     async def get_user(self, user_id: int) -> Dict[str, Any]:
         """Get user details."""
-        result = await self._call("user.get", {"ID": user_id})
-        return result if not isinstance(result, dict) or "error" not in result else {}
+        response = await self._call("user.get", {"ID": user_id})
+        if "error" in response:
+            return response
+        result = response.get("result", [])
+        if isinstance(result, list):
+            return result[0] if result else {}
+        return result or {}
 
     async def get_deal_stages(self) -> List[Dict[str, Any]]:
-        """Get deal stages/pipeline."""
-        result = await self._call("crm.dealcategory.stage.list", {})
+        """Get all deal stages across pipelines via crm.status.list."""
+        response = await self._call("crm.status.list", {"filter": {"ENTITY_ID": "DEAL_STAGE"}})
+        if "error" in response:
+            return []
+        result = response.get("result", [])
         return result if isinstance(result, list) else []

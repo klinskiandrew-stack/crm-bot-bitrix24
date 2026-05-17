@@ -1,12 +1,27 @@
 """Tool handler implementations."""
 
 import json
+import re
 from datetime import datetime, timedelta
 from typing import Dict, Any, List
 import structlog
 from b24.client import Bitrix24Client
 
 logger = structlog.get_logger()
+
+DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _validate_params(params: Dict[str, Any], date_keys=("filter_by_date_from", "filter_by_date_to", "date_from", "date_to"), stage_key="filter_by_stage"):
+    """Validate common Bitrix24 param formats. Returns None if OK, error dict if invalid."""
+    for k in date_keys:
+        v = params.get(k)
+        if v and not DATE_RE.match(str(v)):
+            return {"error": f"Параметр {k}='{v}' не соответствует формату YYYY-MM-DD"}
+    stage = params.get(stage_key)
+    if stage and ":" not in str(stage):
+        return {"error": f"filter_by_stage='{stage}' имеет неверный формат, ожидается 'C{{N}}:CODE' (например 'C2:WON')"}
+    return None
 
 
 class ToolHandlers:
@@ -47,6 +62,10 @@ class ToolHandlers:
 
     async def get_deals(self, params: Dict[str, Any], user_context: Dict[str, Any]) -> Dict[str, Any]:
         """Get deals for assigned users."""
+        err = _validate_params(params)
+        if err:
+            return err
+
         client = await self._get_client()
         b24_user_ids = user_context.get("b24_user_ids", [])
         is_admin = user_context.get("is_admin", False)
@@ -59,7 +78,7 @@ class ToolHandlers:
             filter_by_stage=params.get("filter_by_stage"),
             filter_by_date_from=params.get("filter_by_date_from"),
             filter_by_date_to=params.get("filter_by_date_to"),
-            limit=min(params.get("limit", 50), 500)
+            limit=min(params.get("limit", 20), 100)
         )
 
         if isinstance(deals, dict) and "error" in deals:
@@ -93,12 +112,16 @@ class ToolHandlers:
         if not b24_user_ids and not user_context.get("is_admin", False):
             return {"leads": [], "message": "No assigned users configured"}
 
+        err = _validate_params(params, stage_key="not_used")
+        if err:
+            return err
+
         leads = await client.get_leads(
             assigned_by_ids=b24_user_ids,
             filter_by_status=params.get("filter_by_status"),
             filter_by_date_from=params.get("filter_by_date_from"),
             filter_by_date_to=params.get("filter_by_date_to"),
-            limit=min(params.get("limit", 50), 500)
+            limit=min(params.get("limit", 20), 100)
         )
 
         if isinstance(leads, dict) and "error" in leads:
@@ -136,14 +159,17 @@ class ToolHandlers:
         }
 
     async def get_pipeline_summary(self, params: Dict[str, Any], user_context: Dict[str, Any]) -> Dict[str, Any]:
-        """Get pipeline summary."""
+        """Get pipeline summary — aggregates only, no raw deals in response."""
+        err = _validate_params(params, stage_key="not_used")
+        if err:
+            return err
+
         client = await self._get_client()
         b24_user_ids = user_context.get("b24_user_ids", [])
 
         if not b24_user_ids and not user_context.get("is_admin", False):
             return {"summary": {}, "message": "No assigned users configured"}
 
-        # Get all deals for the period
         deals = await client.get_deals(
             assigned_by_ids=b24_user_ids,
             filter_by_date_from=params.get("date_from"),
@@ -157,25 +183,40 @@ class ToolHandlers:
         if not isinstance(deals, list):
             return {"summary": {}}
 
-        # Group by stage
-        summary = {}
-        total_amount = 0
+        # Group by stage AND semantic
+        by_stage = {}
+        by_semantic = {"P": {"count": 0, "amount": 0}, "S": {"count": 0, "amount": 0}, "F": {"count": 0, "amount": 0}}
+        total_amount = 0.0
 
         for deal in deals:
             stage = deal.get("STAGE_ID", "UNKNOWN")
+            sem = deal.get("STAGE_SEMANTIC_ID", "P")
             amount = float(deal.get("OPPORTUNITY", 0) or 0)
 
-            if stage not in summary:
-                summary[stage] = {"count": 0, "amount": 0}
+            if stage not in by_stage:
+                by_stage[stage] = {"count": 0, "amount": 0.0}
+            by_stage[stage]["count"] += 1
+            by_stage[stage]["amount"] += amount
 
-            summary[stage]["count"] += 1
-            summary[stage]["amount"] += amount
+            if sem in by_semantic:
+                by_semantic[sem]["count"] += 1
+                by_semantic[sem]["amount"] += amount
+
             total_amount += amount
 
         return {
-            "summary": summary,
+            "total_deals": len(deals),
             "total_amount": total_amount,
-            "total_deals": len(deals)
+            "by_semantic": {
+                "in_progress": by_semantic["P"],
+                "won": by_semantic["S"],
+                "lost": by_semantic["F"],
+            },
+            "by_stage": by_stage,
+            "period": {
+                "from": params.get("date_from") or "all",
+                "to": params.get("date_to") or "all",
+            }
         }
 
     async def get_user_activity_summary(self, params: Dict[str, Any], user_context: Dict[str, Any]) -> Dict[str, Any]:
