@@ -88,6 +88,8 @@ class ToolHandlers:
                 return await self.avito_calls(tool_input, user_context)
             elif tool_name == "avito_funnel":
                 return await self.avito_funnel(tool_input, user_context)
+            elif tool_name == "avito_weak_ads":
+                return await self.avito_weak_ads(tool_input, user_context)
             else:
                 return {"error": f"Unknown tool: {tool_name}"}
         except Exception as e:
@@ -640,6 +642,18 @@ class ToolHandlers:
             date_from=params.get("date_from"),
             date_to=params.get("date_to"),
             limit=int(params.get("limit", 50)),
+        )
+
+    async def avito_weak_ads(self, params: Dict[str, Any], user_context: Dict[str, Any]) -> Dict[str, Any]:
+        if not avito_client.enabled:
+            return {"error": "Avito не настроен"}
+        err = _validate_params(params, date_keys=("date_from", "date_to"), stage_key="not_used")
+        if err:
+            return err
+        return await avito_client.find_weak_and_star_ads(
+            date_from=params.get("date_from"),
+            date_to=params.get("date_to"),
+            min_views_for_dead_zone=int(params.get("min_views_for_dead_zone", 20)),
         )
 
     async def avito_funnel(self, params: Dict[str, Any], user_context: Dict[str, Any]) -> Dict[str, Any]:
