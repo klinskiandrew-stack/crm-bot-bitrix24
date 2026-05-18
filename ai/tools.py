@@ -402,5 +402,46 @@ def get_tools_definitions():
                 },
                 "required": []
             }
+        },
+        {
+            "name": "get_avito_campaigns",
+            "description": (
+                "Получить список активных рекламных кампаний на Avito. "
+                "Используй для вопросов про объявления, кампании, рекламу на Avito."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        },
+        {
+            "name": "get_avito_stats",
+            "description": (
+                "Получить статистику по объявлениям на Avito за период: "
+                "просмотры, контакты, звонки. ИСПОЛЬЗУЙ для анализа эффективности объявлений."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "date_from": {
+                        "type": "string",
+                        "description": "Начало периода в формате YYYY-MM-DD (например 2026-05-01)."
+                    },
+                    "date_to": {
+                        "type": "string",
+                        "description": "Конец периода в формате YYYY-MM-DD (например 2026-05-18)."
+                    },
+                    "stat_type": {
+                        "type": "string",
+                        "enum": ["items", "campaigns"],
+                        "description": (
+                            "'items' — статистика по отдельным объявлениям (просмотры/контакты/звонки), "
+                            "'campaigns' — по кампаниям (расходы/клики/показы)"
+                        )
+                    }
+                },
+                "required": ["date_from", "date_to", "stat_type"]
+            }
         }
     ]

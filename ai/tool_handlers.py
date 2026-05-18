@@ -8,6 +8,8 @@ import structlog
 from b24.client import Bitrix24Client
 from metrika.client import metrika_client
 from sheets.lus_client import lus_client
+from avito.client import avito_client
+from config import settings
 
 logger = structlog.get_logger()
 
@@ -74,6 +76,10 @@ class ToolHandlers:
                 return await self.lus_search(tool_input, user_context)
             elif tool_name == "lus_financials":
                 return await self.lus_financials(tool_input, user_context)
+            elif tool_name == "get_avito_campaigns":
+                return await self.get_avito_campaigns(tool_input, user_context)
+            elif tool_name == "get_avito_stats":
+                return await self.get_avito_stats(tool_input, user_context)
             else:
                 return {"error": f"Unknown tool: {tool_name}"}
         except Exception as e:
@@ -582,6 +588,41 @@ class ToolHandlers:
             group_by=actual_group,
             only_completed=only_completed,
         )
+
+    async def get_avito_campaigns(self, params: Dict[str, Any], user_context: Dict[str, Any]) -> Dict[str, Any]:
+        """Get list of Avito ad campaigns."""
+        if not avito_client.enabled:
+            return {"error": "Avito API not configured (AVITO_CLIENT_ID/AVITO_CLIENT_SECRET empty)"}
+
+        user_id = settings.avito_user_id
+        if not user_id:
+            return {"error": "AVITO_USER_ID not set in .env"}
+
+        return await avito_client.get_campaigns(user_id)
+
+    async def get_avito_stats(self, params: Dict[str, Any], user_context: Dict[str, Any]) -> Dict[str, Any]:
+        """Get statistics from Avito (items or campaigns) for a date range."""
+        if not avito_client.enabled:
+            return {"error": "Avito API not configured"}
+
+        err = _validate_params(params, date_keys=("date_from", "date_to"), stage_key="not_used")
+        if err:
+            return err
+
+        user_id = settings.avito_user_id
+        if not user_id:
+            return {"error": "AVITO_USER_ID not set in .env"}
+
+        date_from = params.get("date_from")
+        date_to = params.get("date_to")
+        stat_type = params.get("stat_type", "items")
+
+        if stat_type == "items":
+            return await avito_client.get_stats_items(user_id, date_from, date_to)
+        elif stat_type == "campaigns":
+            return await avito_client.get_stats_campaigns(user_id, date_from, date_to)
+        else:
+            return {"error": f"stat_type должен быть 'items' или 'campaigns', получен '{stat_type}'"}
 
 
 # Global handlers instance
