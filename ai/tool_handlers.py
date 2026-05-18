@@ -76,10 +76,16 @@ class ToolHandlers:
                 return await self.lus_search(tool_input, user_context)
             elif tool_name == "lus_financials":
                 return await self.lus_financials(tool_input, user_context)
-            elif tool_name == "get_avito_campaigns":
-                return await self.get_avito_campaigns(tool_input, user_context)
-            elif tool_name == "get_avito_stats":
-                return await self.get_avito_stats(tool_input, user_context)
+            elif tool_name == "avito_balance":
+                return await self.avito_balance(tool_input, user_context)
+            elif tool_name == "avito_items":
+                return await self.avito_items(tool_input, user_context)
+            elif tool_name == "avito_stats":
+                return await self.avito_stats(tool_input, user_context)
+            elif tool_name == "avito_spend":
+                return await self.avito_spend(tool_input, user_context)
+            elif tool_name == "avito_calls":
+                return await self.avito_calls(tool_input, user_context)
             else:
                 return {"error": f"Unknown tool: {tool_name}"}
         except Exception as e:
@@ -589,40 +595,50 @@ class ToolHandlers:
             only_completed=only_completed,
         )
 
-    async def get_avito_campaigns(self, params: Dict[str, Any], user_context: Dict[str, Any]) -> Dict[str, Any]:
-        """Get list of Avito ad campaigns."""
+    async def avito_balance(self, params: Dict[str, Any], user_context: Dict[str, Any]) -> Dict[str, Any]:
         if not avito_client.enabled:
-            return {"error": "Avito API not configured (AVITO_CLIENT_ID/AVITO_CLIENT_SECRET empty)"}
+            return {"error": "Avito не настроен (AVITO_CLIENT_ID/AVITO_CLIENT_SECRET пусты)"}
+        return await avito_client.get_balance()
 
-        user_id = settings.avito_user_id
-        if not user_id:
-            return {"error": "AVITO_USER_ID not set in .env"}
-
-        return await avito_client.get_campaigns(user_id)
-
-    async def get_avito_stats(self, params: Dict[str, Any], user_context: Dict[str, Any]) -> Dict[str, Any]:
-        """Get statistics from Avito (items or campaigns) for a date range."""
+    async def avito_items(self, params: Dict[str, Any], user_context: Dict[str, Any]) -> Dict[str, Any]:
         if not avito_client.enabled:
-            return {"error": "Avito API not configured"}
+            return {"error": "Avito не настроен"}
+        limit = min(int(params.get("limit", 50)), 100)
+        return await avito_client.get_items_list(per_page=limit)
 
+    async def avito_stats(self, params: Dict[str, Any], user_context: Dict[str, Any]) -> Dict[str, Any]:
+        if not avito_client.enabled:
+            return {"error": "Avito не настроен"}
         err = _validate_params(params, date_keys=("date_from", "date_to"), stage_key="not_used")
         if err:
             return err
+        return await avito_client.get_items_stats(
+            date_from=params.get("date_from"),
+            date_to=params.get("date_to"),
+        )
 
-        user_id = settings.avito_user_id
-        if not user_id:
-            return {"error": "AVITO_USER_ID not set in .env"}
+    async def avito_spend(self, params: Dict[str, Any], user_context: Dict[str, Any]) -> Dict[str, Any]:
+        if not avito_client.enabled:
+            return {"error": "Avito не настроен"}
+        err = _validate_params(params, date_keys=("date_from", "date_to"), stage_key="not_used")
+        if err:
+            return err
+        return await avito_client.get_operations_history(
+            date_from=params.get("date_from"),
+            date_to=params.get("date_to"),
+        )
 
-        date_from = params.get("date_from")
-        date_to = params.get("date_to")
-        stat_type = params.get("stat_type", "items")
-
-        if stat_type == "items":
-            return await avito_client.get_stats_items(user_id, date_from, date_to)
-        elif stat_type == "campaigns":
-            return await avito_client.get_stats_campaigns(user_id, date_from, date_to)
-        else:
-            return {"error": f"stat_type должен быть 'items' или 'campaigns', получен '{stat_type}'"}
+    async def avito_calls(self, params: Dict[str, Any], user_context: Dict[str, Any]) -> Dict[str, Any]:
+        if not avito_client.enabled:
+            return {"error": "Avito не настроен"}
+        err = _validate_params(params, date_keys=("date_from", "date_to"), stage_key="not_used")
+        if err:
+            return err
+        return await avito_client.get_calls(
+            date_from=params.get("date_from"),
+            date_to=params.get("date_to"),
+            limit=int(params.get("limit", 50)),
+        )
 
 
 # Global handlers instance

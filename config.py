@@ -27,11 +27,12 @@ class Settings(BaseSettings):
     metrika_counter_id: str = ""
     metrika_base_url: str = "https://api-metrika.yandex.net"
 
-    # Avito Ads API (optional). client_id/secret from developers.avito.ru
+    # Avito API (optional). client_id/secret from developers.avito.ru → Мои приложения.
+    # Uses client_credentials flow (Приложение персональной авторизации).
+    # AVITO_USER_ID = "Номер профиля" in кабинете разработчика.
     avito_client_id: str = ""
     avito_client_secret: str = ""
-    avito_refresh_token: str = ""
-    avito_user_id: str = ""  # Account ID in Avito (get from API or cabinet)
+    avito_user_id: str = ""
 
     # Google Sheets (optional). Service account JSON path. SA must have read access to the sheet.
     google_sa_path: str = "/opt/crm-bot/secrets/google_sa.json"

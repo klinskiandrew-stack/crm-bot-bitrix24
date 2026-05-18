@@ -1,20 +1,25 @@
-"""Avito Ads API client for statistics and campaign data.
+"""Avito API client (client_credentials flow).
 
-Handles OAuth 2.0 flow and provides methods to fetch:
-- Campaign list and details
-- Statistics by items (views, contacts, calls)
-- Promotion bids and performance
+Авито использует "Приложение персональной авторизации" — это OAuth2
+client_credentials grant. Access token живёт 24 часа, refresh не нужен:
+просто запрашиваем новый по client_id+client_secret.
 
-In-memory cache (30-60 min TTL) for stats queries.
-Refresh token stored in .env, auto-refresh on 403 Forbidden.
+Endpoints used:
+  POST /token                                  → get access_token
+  GET  /core/v1/accounts/self                  → profile info
+  GET  /core/v1/accounts/{id}/balance/         → счёт (real + bonus)
+  POST /core/v1/accounts/operations_history/   → расходы (CPA, тарифы)
+  GET  /core/v1/items                          → список объявлений
+  POST /stats/v1/accounts/{id}/items           → views/contacts/favorites по объявлениям
+  POST /calltracking/v1/getCalls/              → звонки
 """
 
 import aiohttp
-import asyncio
 import json
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any, Dict, List, Optional
+
 import structlog
 from config import settings
 
@@ -22,16 +27,19 @@ logger = structlog.get_logger()
 
 
 class AvitoClient:
-    """Avito Ads API wrapper. Methods return ready-to-render dicts."""
+    """Avito API wrapper (client_credentials flow)."""
 
     def __init__(self):
         self.client_id = settings.avito_client_id
         self.client_secret = settings.avito_client_secret
-        self.access_token = None
-        self.refresh_token = settings.avito_refresh_token
-        self.token_expires_at = 0
         self.base_url = "https://api.avito.ru"
         self._session: Optional[aiohttp.ClientSession] = None
+
+        # Access token cached in-memory (24h TTL from Avito)
+        self._access_token: Optional[str] = None
+        self._token_expires_at: float = 0
+
+        # Response cache: {key: (expires_ts, data)}
         self._cache: Dict[str, tuple] = {}
         self.cache_ttl_sec = 1800  # 30 min
 
@@ -43,286 +51,347 @@ class AvitoClient:
         if self._session is None or self._session.closed:
             self._session = aiohttp.ClientSession()
 
-    async def _ensure_token(self):
-        """Refresh token if expired."""
+    async def _get_access_token(self) -> str:
+        """Get cached or fresh access token (client_credentials flow)."""
         now = time.time()
-        if self.access_token and self.token_expires_at > now:
-            return
+        if self._access_token and self._token_expires_at > now + 60:
+            return self._access_token
 
-        if not self.refresh_token:
-            logger.error("Avito refresh_token not set in .env")
-            raise ValueError("AVITO_REFRESH_TOKEN required")
-
-        await self._refresh_access_token()
-
-    async def _refresh_access_token(self):
-        """OAuth 2.0 refresh token flow."""
         await self._ensure_session()
-        url = f"{self.base_url}/oauth/token"
-
         try:
-            data = {
-                "client_id": self.client_id,
-                "client_secret": self.client_secret,
-                "grant_type": "refresh_token",
-                "refresh_token": self.refresh_token,
-            }
-
             async with self._session.post(
-                url,
-                data=data,
+                f"{self.base_url}/token",
+                data={
+                    "client_id": self.client_id,
+                    "client_secret": self.client_secret,
+                    "grant_type": "client_credentials",
+                },
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
                 timeout=aiohttp.ClientTimeout(total=30),
             ) as resp:
-                resp_data = await resp.json()
+                data = await resp.json()
+                if resp.status != 200 or "access_token" not in data:
+                    logger.error("Avito token request failed", status=resp.status, body=data)
+                    raise ValueError(f"Avito token error: {data}")
 
-                if resp.status != 200:
-                    logger.error("Avito token refresh failed", status=resp.status, error=resp_data)
-                    raise ValueError(f"Token refresh failed: {resp_data}")
-
-                self.access_token = resp_data.get("access_token")
-                self.refresh_token = resp_data.get("refresh_token", self.refresh_token)
-                expires_in = resp_data.get("expires_in", 86400)
-                self.token_expires_at = time.time() + expires_in
-
-                logger.info(
-                    "Avito token refreshed",
-                    expires_in=expires_in,
-                    token_expires_at=datetime.fromtimestamp(self.token_expires_at),
-                )
+                self._access_token = data["access_token"]
+                self._token_expires_at = now + int(data.get("expires_in", 86400))
+                logger.info("Avito token obtained", expires_in=data.get("expires_in"))
+                return self._access_token
         except Exception as e:
-            logger.error("Avito token refresh request failed", error=str(e))
+            logger.error("Avito token request exception", error=str(e))
             raise
 
     async def _request(self, method: str, endpoint: str, **kwargs) -> Dict[str, Any]:
-        """Base HTTP request with OAuth and error handling."""
+        """HTTP request with auto-token. Retries once on 401/403."""
         await self._ensure_session()
-        await self._ensure_token()
 
-        url = f"{self.base_url}{endpoint}"
-        headers = {
-            "Authorization": f"Bearer {self.access_token}",
-            "Content-Type": "application/json",
-        }
+        for attempt in range(2):
+            token = await self._get_access_token()
+            headers = kwargs.pop("headers", {})
+            headers["Authorization"] = f"Bearer {token}"
+            headers.setdefault("Content-Type", "application/json")
 
-        try:
-            async with self._session.request(
-                method,
-                url,
-                headers=headers,
-                timeout=aiohttp.ClientTimeout(total=30),
-                **kwargs,
-            ) as resp:
-                text = await resp.text()
+            try:
+                async with self._session.request(
+                    method,
+                    f"{self.base_url}{endpoint}",
+                    headers=headers,
+                    timeout=aiohttp.ClientTimeout(total=30),
+                    **kwargs,
+                ) as resp:
+                    text = await resp.text()
 
-                if resp.status == 403:
-                    logger.warning("Avito 403 — token likely expired, refreshing")
-                    self.token_expires_at = 0  # Force refresh
-                    await self._ensure_token()
-                    return await self._request(method, endpoint, **kwargs)  # Retry
+                    if resp.status in (401, 403) and attempt == 0:
+                        logger.warning("Avito auth error, refreshing token", status=resp.status)
+                        self._token_expires_at = 0
+                        continue
 
-                try:
-                    data = json.loads(text) if text else {}
-                except json.JSONDecodeError:
-                    logger.error("Avito non-JSON response", status=resp.status, body=text[:200])
-                    return {"error": f"Avito non-JSON (status={resp.status})"}
+                    try:
+                        data = json.loads(text) if text else {}
+                    except json.JSONDecodeError:
+                        logger.error("Avito non-JSON response", status=resp.status, body=text[:200])
+                        return {"error": f"Avito non-JSON (status={resp.status})"}
 
-                if resp.status != 200:
-                    msg = data.get("message") or data.get("error") or str(data)[:200]
-                    logger.error("Avito API error", status=resp.status, error=msg)
-                    return {"error": f"Avito API: {msg}"}
+                    if resp.status != 200:
+                        msg = data.get("message") or data.get("error") or str(data)[:200]
+                        logger.error("Avito API error", endpoint=endpoint, status=resp.status, error=msg)
+                        return {"error": f"Avito {resp.status}: {msg}"}
 
-                return data
-        except Exception as e:
-            logger.error("Avito request failed", error=str(e))
-            return {"error": str(e)}
+                    return data
 
-    # ---------- Public API Methods ----------
+            except Exception as e:
+                logger.error("Avito request exception", endpoint=endpoint, error=str(e))
+                return {"error": str(e)}
 
-    async def get_campaigns(self, user_id: str) -> Dict[str, Any]:
-        """Get list of active campaigns for a user/account."""
+        return {"error": "Avito: failed after retry"}
+
+    def _cache_get(self, key: str) -> Optional[Any]:
+        c = self._cache.get(key)
+        if c and c[0] > time.time():
+            return c[1]
+        return None
+
+    def _cache_set(self, key: str, data: Any):
+        self._cache[key] = (time.time() + self.cache_ttl_sec, data)
+
+    # ---------- Public methods ----------
+
+    async def get_profile(self) -> Dict[str, Any]:
+        """Get current account profile (email, phones, id, name, url)."""
         if not self.enabled:
-            return {"error": "Avito API not configured (AVITO_CLIENT_ID/AVITO_CLIENT_SECRET empty)"}
+            return {"error": "Avito not configured"}
 
-        data = await self._request(
-            "GET",
-            f"/core/v1/accounts/{user_id}/campaigns",
-        )
+        cached = self._cache_get("profile")
+        if cached:
+            return cached
 
-        if "error" in data:
-            return data
+        data = await self._request("GET", "/core/v1/accounts/self")
+        if "error" not in data:
+            self._cache_set("profile", data)
+        return data
 
-        campaigns = []
-        for c in data.get("campaigns", []):
-            campaigns.append({
-                "id": c.get("id"),
-                "title": c.get("title"),
-                "status": c.get("status"),
-                "type": c.get("type"),
-                "created_at": c.get("created_at"),
-            })
+    async def get_balance(self) -> Dict[str, Any]:
+        """Balance: real (rub) + bonus."""
+        if not self.enabled:
+            return {"error": "Avito not configured"}
 
-        return {
-            "user_id": user_id,
-            "total": len(campaigns),
-            "campaigns": campaigns,
-        }
+        user_id = settings.avito_user_id
+        if not user_id:
+            return {"error": "AVITO_USER_ID not set"}
 
-    async def get_stats_items(
+        return await self._request("GET", f"/core/v1/accounts/{user_id}/balance/")
+
+    async def get_operations_history(
         self,
-        user_id: str,
         date_from: str,
         date_to: str,
-        limit: int = 100,
     ) -> Dict[str, Any]:
-        """Get statistics by items (ads) — views, contacts, calls.
+        """Operations history (charges, tariffs, deposits) for period.
 
         Args:
-            user_id: Account/user ID in Avito
-            date_from: YYYY-MM-DD
-            date_to: YYYY-MM-DD
-            limit: Max items to return (default 100, max 1000)
+            date_from, date_to: YYYY-MM-DD
+        Returns aggregated by serviceType + raw operations list.
         """
         if not self.enabled:
             return {"error": "Avito not configured"}
 
-        # Check cache
-        cache_key = f"stats_items:{user_id}:{date_from}:{date_to}"
-        now = time.time()
-        cached = self._cache.get(cache_key)
-        if cached and cached[0] > now:
-            return cached[1]
+        cache_key = f"ops:{date_from}:{date_to}"
+        cached = self._cache_get(cache_key)
+        if cached:
+            return cached
 
         payload = {
-            "dateFrom": date_from,
-            "dateTo": date_to,
-            "limit": limit,
+            "dateTimeFrom": f"{date_from}T00:00:00Z",
+            "dateTimeTo": f"{date_to}T23:59:59Z",
         }
-
         data = await self._request(
             "POST",
-            f"/core/v1/accounts/{user_id}/stats/items",
-            json=payload,
+            "/core/v1/accounts/operations_history/",
+            data=json.dumps(payload),
         )
+        if "error" in data:
+            return data
 
+        ops = data.get("result", {}).get("operations", [])
+
+        # Aggregate by serviceType (cpa, tariff, etc.) — show net spend
+        # operationType variants: "списание средств", "резервирование...", "сторно", "внесение..."
+        SPEND_TYPES = {"списание средств", "резервирование средств под услугу"}
+        REFUND_TYPES = {"сторно"}
+        DEPOSIT_TYPES = {"внесение CPA аванса", "внесение средств"}
+
+        by_service: Dict[str, Dict[str, float]] = {}
+        total_spend = 0.0
+        total_refund = 0.0
+        total_deposit = 0.0
+
+        for op in ops:
+            stype = op.get("serviceType") or op.get("serviceName") or "прочее"
+            otype = (op.get("operationType") or "").lower()
+            amount = float(op.get("amountTotal", 0))
+
+            if stype not in by_service:
+                by_service[stype] = {"spend": 0.0, "refund": 0.0, "deposit": 0.0, "count": 0}
+            by_service[stype]["count"] += 1
+
+            if any(s in otype for s in ("списан", "резервирован")):
+                by_service[stype]["spend"] += amount
+                total_spend += amount
+            elif "сторно" in otype:
+                by_service[stype]["refund"] += amount
+                total_refund += amount
+            elif "внесен" in otype:
+                by_service[stype]["deposit"] += amount
+                total_deposit += amount
+
+        return {
+            "date_from": date_from,
+            "date_to": date_to,
+            "total_spend": round(total_spend, 2),
+            "total_refund": round(total_refund, 2),
+            "net_spend": round(total_spend - total_refund, 2),
+            "total_deposit": round(total_deposit, 2),
+            "by_service": {k: {kk: round(vv, 2) if isinstance(vv, float) else vv for kk, vv in v.items()} for k, v in by_service.items()},
+            "operations_count": len(ops),
+            "operations": ops[:20],
+        }
+
+    async def get_items_list(self, per_page: int = 50) -> Dict[str, Any]:
+        """List active items (ads)."""
+        if not self.enabled:
+            return {"error": "Avito not configured"}
+
+        cache_key = f"items:{per_page}"
+        cached = self._cache_get(cache_key)
+        if cached:
+            return cached
+
+        params = {"page": 1, "per_page": min(per_page, 100), "status": "active"}
+        data = await self._request("GET", "/core/v1/items", params=params)
         if "error" in data:
             return data
 
         items = []
-        total_views = 0
-        total_contacts = 0
-        total_calls = 0
-
-        for item in data.get("items", []):
-            stats = item.get("stats", {})
-            views = stats.get("views", 0)
-            contacts = stats.get("contacts", 0)
-            calls = stats.get("calls", 0)
-
-            total_views += views
-            total_contacts += contacts
-            total_calls += calls
-
+        for r in data.get("resources", []):
             items.append({
-                "item_id": item.get("itemId"),
-                "title": item.get("title"),
-                "views": views,
-                "contacts": contacts,
-                "calls": calls,
-                "url": item.get("url"),
+                "id": r.get("id"),
+                "title": r.get("title"),
+                "price": r.get("price"),
+                "status": r.get("status"),
+                "address": r.get("address"),
+                "category": (r.get("category") or {}).get("name"),
+                "url": r.get("url"),
             })
-
-        result = {
-            "user_id": user_id,
-            "date_from": date_from,
-            "date_to": date_to,
-            "total_views": total_views,
-            "total_contacts": total_contacts,
-            "total_calls": total_calls,
-            "items_count": len(items),
-            "items": items,
-        }
-
-        self._cache[cache_key] = (now + self.cache_ttl_sec, result)
-        logger.info("Avito stats fetched", user_id=user_id, items=len(items), views=total_views)
-
+        result = {"total": len(items), "items": items}
+        self._cache_set(cache_key, result)
         return result
 
-    async def get_stats_campaigns(
+    async def get_items_stats(
         self,
-        user_id: str,
         date_from: str,
         date_to: str,
+        item_ids: Optional[List[int]] = None,
     ) -> Dict[str, Any]:
-        """Get aggregated statistics for campaigns (ads, impressions, cost)."""
+        """Stats by ad: views / uniqViews / uniqContacts / uniqFavorites.
+
+        If item_ids not provided, auto-fetches active ads list first.
+        """
         if not self.enabled:
             return {"error": "Avito not configured"}
 
-        cache_key = f"stats_campaigns:{user_id}:{date_from}:{date_to}"
-        now = time.time()
-        cached = self._cache.get(cache_key)
-        if cached and cached[0] > now:
-            return cached[1]
+        user_id = settings.avito_user_id
+        if not user_id:
+            return {"error": "AVITO_USER_ID not set"}
 
+        cache_key = f"stats:{date_from}:{date_to}:{item_ids}"
+        cached = self._cache_get(cache_key)
+        if cached:
+            return cached
+
+        # Auto-load item IDs if not given
+        if not item_ids:
+            items_data = await self.get_items_list(per_page=100)
+            if "error" in items_data:
+                return items_data
+            item_ids = [it["id"] for it in items_data.get("items", [])]
+            if not item_ids:
+                return {"error": "Нет активных объявлений"}
+
+        # API limit: max 200 item IDs per request
         payload = {
             "dateFrom": date_from,
             "dateTo": date_to,
+            "fields": ["views", "uniqViews", "uniqContacts", "uniqFavorites"],
+            "itemIds": item_ids[:200],
         }
-
         data = await self._request(
             "POST",
-            f"/core/v1/accounts/{user_id}/stats/campaigns",
-            json=payload,
+            f"/stats/v1/accounts/{user_id}/items",
+            data=json.dumps(payload),
         )
-
         if "error" in data:
             return data
 
-        campaigns = []
-        total_cost = 0
-        total_impressions = 0
-        total_clicks = 0
+        # Aggregate
+        items_stats = []
+        total_views = total_uniq_views = total_contacts = total_favorites = 0
+        for item in data.get("result", {}).get("items", []):
+            views = sum(d.get("views", 0) for d in item.get("stats", []))
+            uniq_views = sum(d.get("uniqViews", 0) for d in item.get("stats", []))
+            contacts = sum(d.get("uniqContacts", 0) for d in item.get("stats", []))
+            favorites = sum(d.get("uniqFavorites", 0) for d in item.get("stats", []))
 
-        for c in data.get("campaigns", []):
-            stats = c.get("stats", {})
-            cost = stats.get("cost", 0)
-            impressions = stats.get("impressions", 0)
-            clicks = stats.get("clicks", 0)
+            total_views += views
+            total_uniq_views += uniq_views
+            total_contacts += contacts
+            total_favorites += favorites
 
-            total_cost += cost
-            total_impressions += impressions
-            total_clicks += clicks
+            if views or contacts:
+                items_stats.append({
+                    "item_id": item.get("itemId"),
+                    "views": views,
+                    "uniq_views": uniq_views,
+                    "contacts": contacts,
+                    "favorites": favorites,
+                })
 
-            campaigns.append({
-                "campaign_id": c.get("campaignId"),
-                "title": c.get("title"),
-                "cost": cost,
-                "impressions": impressions,
-                "clicks": clicks,
-                "cpc": round(cost / clicks, 2) if clicks > 0 else 0,
-                "ctr": round((clicks / impressions) * 100, 2) if impressions > 0 else 0,
-            })
+        # Sort by views desc
+        items_stats.sort(key=lambda x: x["views"], reverse=True)
 
         result = {
-            "user_id": user_id,
             "date_from": date_from,
             "date_to": date_to,
-            "total_cost": total_cost,
-            "total_impressions": total_impressions,
-            "total_clicks": total_clicks,
-            "total_cpc": round(total_cost / total_clicks, 2) if total_clicks > 0 else 0,
-            "total_ctr": round((total_clicks / total_impressions) * 100, 2) if total_impressions > 0 else 0,
-            "campaigns_count": len(campaigns),
-            "campaigns": campaigns,
+            "total_views": total_views,
+            "total_uniq_views": total_uniq_views,
+            "total_contacts": total_contacts,
+            "total_favorites": total_favorites,
+            "items_count": len(items_stats),
+            "items": items_stats[:30],  # top 30
         }
+        self._cache_set(cache_key, result)
+        return result
 
-        self._cache[cache_key] = (now + self.cache_ttl_sec, result)
-        logger.info(
-            "Avito campaign stats fetched",
-            user_id=user_id,
-            campaigns=len(campaigns),
-            cost=total_cost,
+    async def get_calls(
+        self,
+        date_from: str,
+        date_to: str,
+        limit: int = 50,
+    ) -> Dict[str, Any]:
+        """Calls from calltracking (phone calls to ads).
+
+        Args:
+            date_from, date_to: YYYY-MM-DD
+        """
+        if not self.enabled:
+            return {"error": "Avito not configured"}
+
+        cache_key = f"calls:{date_from}:{date_to}:{limit}"
+        cached = self._cache_get(cache_key)
+        if cached:
+            return cached
+
+        payload = {
+            "dateTimeFrom": f"{date_from}T00:00:00Z",
+            "dateTimeTo": f"{date_to}T23:59:59Z",
+            "limit": min(limit, 100),
+        }
+        data = await self._request(
+            "POST",
+            "/calltracking/v1/getCalls/",
+            data=json.dumps(payload),
         )
+        if "error" in data:
+            return data
 
+        calls = data.get("calls", [])
+        result = {
+            "date_from": date_from,
+            "date_to": date_to,
+            "total_calls": len(calls),
+            "calls": calls[:limit],
+        }
+        self._cache_set(cache_key, result)
         return result
 
     async def close(self):
@@ -330,5 +399,4 @@ class AvitoClient:
             await self._session.close()
 
 
-# Global instance
 avito_client = AvitoClient()
