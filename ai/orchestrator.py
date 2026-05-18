@@ -36,8 +36,8 @@ class Orchestrator:
         # When cumulative input passes this fraction of the hard limit,
         # trim old tool_results down to a placeholder. Keeps the most
         # recent K turns intact so the model still has its working data.
-        self.trim_threshold_ratio = 0.6  # 60% of max_input_tokens
-        self.keep_recent_tool_results = 2  # how many recent results stay full
+        self.trim_threshold_ratio = 0.4  # 40% of max_input_tokens — start early
+        self.keep_recent_tool_results = 1  # how many recent results stay full
 
     def _trim_old_tool_results(self, messages: List[Dict[str, Any]]) -> int:
         """Replace JSON of old tool_results with short placeholders.

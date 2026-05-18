@@ -416,13 +416,17 @@ class ToolHandlers:
         enriched = await client.enrich_with_uf_names(client.ENTITY_TYPE_LEAD, lead, drop_empty=True)
         enriched["card_url"] = client.lead_url(lead_id)
 
-        # Manager comments inside the card
-        comments = await client.get_timeline_comments("lead", int(lead_id), limit=15)
+        # Trim long quiz answers in COMMENTS — they can be 1-2K each
+        if isinstance(enriched.get("COMMENTS"), str) and len(enriched["COMMENTS"]) > 400:
+            enriched["COMMENTS"] = enriched["COMMENTS"][:400] + "... [обрезано]"
+
+        # Manager comments — fewer, shorter. Was 15×1000 = up to 15K just here.
+        comments = await client.get_timeline_comments("lead", int(lead_id), limit=5)
         enriched["timeline_comments"] = [
             {
                 "author_id": c.get("AUTHOR_ID"),
                 "created": c.get("CREATED"),
-                "text": c.get("COMMENT", "")[:1000],
+                "text": c.get("COMMENT", "")[:300],
             }
             for c in comments
         ]
@@ -444,12 +448,15 @@ class ToolHandlers:
         enriched = await client.enrich_with_uf_names(client.ENTITY_TYPE_DEAL, deal, drop_empty=True)
         enriched["card_url"] = client.deal_url(deal_id)
 
-        comments = await client.get_timeline_comments("deal", int(deal_id), limit=15)
+        if isinstance(enriched.get("COMMENTS"), str) and len(enriched["COMMENTS"]) > 400:
+            enriched["COMMENTS"] = enriched["COMMENTS"][:400] + "... [обрезано]"
+
+        comments = await client.get_timeline_comments("deal", int(deal_id), limit=5)
         enriched["timeline_comments"] = [
             {
                 "author_id": c.get("AUTHOR_ID"),
                 "created": c.get("CREATED"),
-                "text": c.get("COMMENT", "")[:1000],
+                "text": c.get("COMMENT", "")[:300],
             }
             for c in comments
         ]
