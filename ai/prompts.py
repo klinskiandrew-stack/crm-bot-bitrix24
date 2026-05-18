@@ -1,6 +1,56 @@
 import json
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Dict, List, Any
+
+import yaml
+
+
+_SOURCES_MAPPING_CACHE: Dict[str, Any] = {}
+
+
+def _load_sources_mapping() -> Dict[str, Any]:
+    """Load config/sources_mapping.yaml once and cache.
+
+    Returns {} if file missing — bot still works, just without mapping.
+    """
+    if _SOURCES_MAPPING_CACHE:
+        return _SOURCES_MAPPING_CACHE
+    path = Path(__file__).resolve().parent.parent / "config" / "sources_mapping.yaml"
+    if not path.exists():
+        return {}
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+        _SOURCES_MAPPING_CACHE.update(data)
+        return data
+    except Exception:
+        return {}
+
+
+def _format_sources_for_prompt(mapping: Dict[str, Any]) -> str:
+    """Render the YAML mapping into compact prompt text the model can use."""
+    if not mapping:
+        return ""
+    lines = ["МАППИНГ ИСТОЧНИКОВ (из config/sources_mapping.yaml):"]
+    for channel, cfg in mapping.items():
+        if not isinstance(cfg, dict):
+            continue
+        ids = cfg.get("bitrix_source_ids", []) or []
+        phones = cfg.get("phone_pool", []) or []
+        utm = cfg.get("utm_rules") or {}
+        desc = cfg.get("description") or ""
+        parts = [f"- «{channel}»:"]
+        if ids:
+            parts.append(f" SOURCE_ID ∈ {ids}")
+        if phones:
+            parts.append(f", + телефонный пул {phones} (искать в TITLE)")
+        if utm:
+            parts.append(f", + UTM правила {utm}")
+        if desc:
+            parts.append(f" — {desc}")
+        lines.append("".join(parts))
+    return "\n".join(lines)
 
 
 def get_system_prompt(
@@ -11,7 +61,11 @@ def get_system_prompt(
 ) -> str:
     """Build system prompt for Claude."""
 
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    from datetime import timedelta as _td
+    today_dt = datetime.now(timezone.utc)
+    today = today_dt.strftime("%Y-%m-%d")
+    today_minus_90 = (today_dt - _td(days=90)).strftime("%Y-%m-%d")
+    sources_mapping_block = _format_sources_for_prompt(_load_sources_mapping())
 
     base_prompt = f"""Ты — Гроу, фирменный помощник компании Growzone. Дружелюбный персонаж-дерево, который помогает руководителям, партнёрам и команде быстро понимать что происходит в продажах, сделках, работе менеджеров и ключевых показателях.
 
@@ -39,7 +93,7 @@ def get_system_prompt(
 КРИТИЧНО: Ты должен видеть ТОЛЬКО данные, относящиеся к указанным пользователям Bitrix24. Другие данные недоступны и не должны раскрываться.
 """
 
-    rules = """
+    rules = f"""
 КРИТИЧЕСКИ ВАЖНО — ИСПОЛЬЗОВАНИЕ ИНСТРУМЕНТОВ:
 - Если пользователь спрашивает О ДАННЫХ из CRM (сделки, лиды, контакты, активность, статистика) — ты ОБЯЗАН СРАЗУ вызвать соответствующий инструмент (tool_use).
 - НИКОГДА не отвечай "Получу информацию", "Сейчас узнаю", "Дай мне момент" — это запрещено. Просто вызови инструмент без предупреждения.
@@ -161,6 +215,44 @@ search_contacts_or_companies, get_pipeline_summary, get_user_activity_summary,
 get_recent_activities, count_deals_passed_stage, get_card_comments,
 metrika_traffic_summary, metrika_traffic_by_source,
 lus_financials, lus_get_deal, lus_search.
+
+================================================================
+ПРАВИЛА ОПРЕДЕЛЕНИЯ ИСТОЧНИКА КАНАЛА:
+================================================================
+
+Когда пользователь спрашивает «лиды/сделки с Авито / с сайта / с Директа / с
+Профи / с мессенджеров и т.п.» — сначала смотри поле SOURCE_ID (в API) или
+SOURCE_DESCRIPTION в карточке лида/сделки. UTM-метки — только если канал
+неоднозначен (например, отличить SEO от Директа на одном source_id=WEB).
+
+{sources_mapping_block}
+
+КАК ИСКАТЬ:
+- Для канала с несколькими SOURCE_ID — передавай в get_leads/get_deals параметр
+  `filter_by_source_ids` со списком всех ID этого канала (см. маппинг выше).
+- Для каналов с phone_pool (Авито, Сайт-СЕО) — дополнительно используй
+  `filter_by_title_contains` с одним из номеров пула (бот сделает substring match
+  по TITLE лида, где обычно записано «79311051870 - Входящий звонок»).
+- Для разграничения SEO vs Директ — если SOURCE_ID=WEB:
+    - С UTM_SOURCE=yandex (или UTM_MEDIUM=cpc) → Яндекс Директ
+    - Без UTM → SEO основного сайта
+
+================================================================
+ДЕФОЛТНЫЙ ПЕРИОД АНАЛИЗА:
+================================================================
+
+Если пользователь НЕ указал период явно — анализируй **последние 90 дней** от
+сегодняшней даты ({today}). Это защита от случайного анализа за всё время с
+многотысячными выборками.
+
+ИСКЛЮЧЕНИЯ когда брать больше:
+- Явно указано «за весь год», «за всё время», «с начала года», «исторически» — бери год или больше.
+- Конкретная дата / период от пользователя — точно её.
+- Нет данных за 90 дней — расширь до года и явно скажи об этом в ответе.
+
+ВСЕГДА в ответе указывай период за который посмотрел («за последние 90 дней (с {today_minus_90} по {today})»). Чтобы пользователь понимал контекст.
+
+================================================================
 
 ИНСТРУМЕНТЫ ЯНДЕКС.МЕТРИКИ (для трафика сайта growzone.ru):
 - metrika_traffic_summary — визиты, уники, отказы, глубина за период.

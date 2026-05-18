@@ -142,7 +142,10 @@ class Bitrix24Client:
         filter_by_stage: str = None,
         filter_by_date_from: str = None,
         filter_by_date_to: str = None,
-        limit: int = 50
+        filter_by_source_ids: Optional[List[str]] = None,
+        filter_by_title_contains: Optional[str] = None,
+        filter_by_utm_source: Optional[str] = None,
+        limit: int = 50,
     ) -> List[Dict[str, Any]]:
         """Get deals for assigned users.
 
@@ -169,6 +172,12 @@ class Bitrix24Client:
             params["filter"][">=DATE_CREATE"] = filter_by_date_from
         if filter_by_date_to:
             params["filter"]["<DATE_CREATE"] = _day_after(filter_by_date_to)
+        if filter_by_source_ids:
+            params["filter"]["SOURCE_ID"] = filter_by_source_ids
+        if filter_by_title_contains:
+            params["filter"]["%TITLE"] = filter_by_title_contains
+        if filter_by_utm_source:
+            params["filter"]["UTM_SOURCE"] = filter_by_utm_source
 
         return await self._paginate("crm.deal.list", params, limit=limit, max_items=limit)
 
@@ -186,7 +195,10 @@ class Bitrix24Client:
         filter_by_status: str = None,
         filter_by_date_from: str = None,
         filter_by_date_to: str = None,
-        limit: int = 50
+        filter_by_source_ids: Optional[List[str]] = None,
+        filter_by_title_contains: Optional[str] = None,
+        filter_by_utm_source: Optional[str] = None,
+        limit: int = 50,
     ) -> List[Dict[str, Any]]:
         """Get leads for assigned users.
 
@@ -213,6 +225,13 @@ class Bitrix24Client:
             params["filter"][">=DATE_CREATE"] = filter_by_date_from
         if filter_by_date_to:
             params["filter"]["<DATE_CREATE"] = _day_after(filter_by_date_to)
+        if filter_by_source_ids:
+            # Bitrix accepts arrays for SOURCE_ID — matches any of given values
+            params["filter"]["SOURCE_ID"] = filter_by_source_ids
+        if filter_by_title_contains:
+            params["filter"]["%TITLE"] = filter_by_title_contains
+        if filter_by_utm_source:
+            params["filter"]["UTM_SOURCE"] = filter_by_utm_source
 
         return await self._paginate("crm.lead.list", params, limit=limit, max_items=limit)
 

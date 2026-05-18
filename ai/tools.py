@@ -42,6 +42,19 @@ def get_tools_definitions():
                     "limit": {
                         "type": "integer",
                         "description": "Максимум сделок в ответе. По умолчанию 20, максимум 100. Больше — только если явно нужно."
+                    },
+                    "filter_by_source_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Список SOURCE_ID для фильтра (см. МАППИНГ ИСТОЧНИКОВ в системном промпте). Например ['1|AVITO', '4', '5'] для Авито."
+                    },
+                    "filter_by_title_contains": {
+                        "type": "string",
+                        "description": "Поиск substring в TITLE сделки (например, телефонный номер из phone_pool для Авито: '79311051870')."
+                    },
+                    "filter_by_utm_source": {
+                        "type": "string",
+                        "description": "Фильтр по точному значению UTM_SOURCE (например 'yandex' для Директа)."
                     }
                 },
                 "required": []
@@ -89,6 +102,19 @@ def get_tools_definitions():
                     "limit": {
                         "type": "integer",
                         "description": "Максимум 100 (по умолчанию 20)."
+                    },
+                    "filter_by_source_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Список SOURCE_ID (см. МАППИНГ ИСТОЧНИКОВ). Например ['1|AVITO', '4', '5'] для Авито."
+                    },
+                    "filter_by_title_contains": {
+                        "type": "string",
+                        "description": "Substring поиск в TITLE лида — для телефонных пулов (например '79311051870' для Авито)."
+                    },
+                    "filter_by_utm_source": {
+                        "type": "string",
+                        "description": "Фильтр по UTM_SOURCE точно (например 'yandex' для Директа)."
                     }
                 },
                 "required": []

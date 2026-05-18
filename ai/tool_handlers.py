@@ -164,6 +164,9 @@ class ToolHandlers:
             filter_by_stage=params.get("filter_by_stage"),
             filter_by_date_from=params.get("filter_by_date_from"),
             filter_by_date_to=params.get("filter_by_date_to"),
+            filter_by_source_ids=params.get("filter_by_source_ids"),
+            filter_by_title_contains=params.get("filter_by_title_contains"),
+            filter_by_utm_source=params.get("filter_by_utm_source"),
             limit=min(params.get("limit", 20), 100)
         )
 
@@ -218,6 +221,9 @@ class ToolHandlers:
             filter_by_status=params.get("filter_by_status"),
             filter_by_date_from=params.get("filter_by_date_from"),
             filter_by_date_to=params.get("filter_by_date_to"),
+            filter_by_source_ids=params.get("filter_by_source_ids"),
+            filter_by_title_contains=params.get("filter_by_title_contains"),
+            filter_by_utm_source=params.get("filter_by_utm_source"),
             limit=min(params.get("limit", 20), 100)
         )
 
