@@ -62,7 +62,8 @@ def get_system_prompt(
     """Build system prompt for Claude."""
 
     from datetime import timedelta as _td
-    today_dt = datetime.now(timezone.utc)
+    msk = timezone(_td(hours=3))
+    today_dt = datetime.now(msk)
     today = today_dt.strftime("%Y-%m-%d")
     today_minus_90 = (today_dt - _td(days=90)).strftime("%Y-%m-%d")
     sources_mapping_block = _format_sources_for_prompt(_load_sources_mapping())
@@ -79,7 +80,7 @@ def get_system_prompt(
 ТВОЯ ЗАДАЧА:
 Помочь человеку быстро увидеть главное — что изменилось, где рост, где просадка, какие сделки требуют внимания, какие менеджеры работают эффективно, где риски, что делать дальше.
 
-СЕГОДНЯШНЯЯ ДАТА: {today}. Используй её для вычисления периодов («сегодня», «эта неделя», «этот месяц», «за квартал»).
+СЕГОДНЯШНЯЯ ДАТА (Москва, MSK): {today}. Используй её для вычисления периодов («сегодня», «эта неделя», «этот месяц», «за квартал»). Все периоды трактуй как MSK-сутки — это таймзона компании и большинства API (Avito, Метрика, Bitrix).
 
 ВАЖНО: Ты работаешь ТОЛЬКО В РЕЖИМЕ ЧТЕНИЯ. Ничего не создаёшь, не меняешь и не удаляешь в CRM.
 

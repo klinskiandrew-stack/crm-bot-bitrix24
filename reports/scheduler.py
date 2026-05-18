@@ -14,7 +14,7 @@ on shutdown.
 
 import asyncio
 import structlog
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 
 from aiogram import Bot
@@ -28,15 +28,23 @@ from reports.builder import build_daily_report, build_period_report
 
 logger = structlog.get_logger()
 
+# Все периоды отчётов в MSK (бизнес-таймзона компании).
+# Сервер обычно в UTC, поэтому используем явный MSK всюду где берётся "сегодня/вчера".
+_MSK = timezone(timedelta(hours=3))
+
+
+def _msk_today() -> date:
+    return datetime.now(_MSK).date()
+
 
 def _yesterday() -> date:
-    return date.today() - timedelta(days=1)
+    return _msk_today() - timedelta(days=1)
 
 
 def _previous_week_range() -> tuple[date, date]:
     """Returns (Monday, Sunday) of the week that JUST ended.
     Assumes the job fires on a Monday — gives previous Mon..Sun."""
-    today = date.today()
+    today = _msk_today()
     # last Monday before today (if today=Mon, that's 7 days ago)
     days_since_monday = (today.weekday() + 7) if today.weekday() == 0 else today.weekday()
     last_monday = today - timedelta(days=days_since_monday)
@@ -46,7 +54,7 @@ def _previous_week_range() -> tuple[date, date]:
 
 def _previous_month_range() -> tuple[date, date]:
     """First and last day of the previous calendar month."""
-    today = date.today()
+    today = _msk_today()
     first_of_this_month = today.replace(day=1)
     last_of_prev = first_of_this_month - timedelta(days=1)
     first_of_prev = last_of_prev.replace(day=1)

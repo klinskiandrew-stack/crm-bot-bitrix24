@@ -12,16 +12,36 @@ Endpoints used:
   GET  /core/v1/items                          → список объявлений
   POST /stats/v1/accounts/{id}/items           → views/contacts/favorites по объявлениям
   POST /calltracking/v1/getCalls/              → звонки
+
+Таймзоны:
+  Avito API stats считает по сервер-таймзоне Avito (MSK / UTC+3), несмотря
+  на то что timezone-параметр игнорируется (тестировали — без эффекта).
+  Поэтому даты `dateFrom`/`dateTo` интерпретируются как MSK-сутки.
+  Бот должен передавать MSK-даты (что делается через системный промпт
+  "сегодняшняя дата"). Для пересчёта UTC→MSK см. _msk_today().
 """
 
 import aiohttp
 import json
 import time
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 import structlog
 from config import settings
+
+MSK_TZ = timezone(timedelta(hours=3))
+
+
+def msk_today() -> str:
+    """Today in Europe/Moscow as YYYY-MM-DD."""
+    return datetime.now(MSK_TZ).strftime("%Y-%m-%d")
+
+
+def msk_date_shift(date_str: str, days: int) -> str:
+    """Shift YYYY-MM-DD by N days (MSK calendar)."""
+    d = datetime.strptime(date_str, "%Y-%m-%d")
+    return (d + timedelta(days=days)).strftime("%Y-%m-%d")
 
 logger = structlog.get_logger()
 
@@ -282,46 +302,23 @@ class AvitoClient:
         self._cache_set(cache_key, result)
         return result
 
-    async def get_items_stats(
+    async def _fetch_stats_aggregate(
         self,
         date_from: str,
         date_to: str,
-        item_ids: Optional[List[int]] = None,
+        item_ids: List[int],
     ) -> Dict[str, Any]:
-        """Stats by ad: views / uniqViews / uniqContacts / uniqFavorites.
+        """Internal: aggregate stats для конкретного списка IDs.
 
-        ВАЖНО:
-        - "uniqContacts" — это ОБРАЩЕНИЯ от клиентов (нажатия "Позвонить" + "Написать").
-          Это и есть то, что в кабинете Avito показывается как "Контакты". Реальный
-          коллтрекинг (запись звонков) — отдельная платная услуга, у Growzone отключена.
-        - Auto-fetches all active items (с пагинацией) если item_ids не указан.
-        - Batch'ит запросы по 200 itemIds (API limit).
+        Возвращает totals + daily breakdown + per-item top list.
         """
-        if not self.enabled:
-            return {"error": "Avito not configured"}
-
         user_id = settings.avito_user_id
-        if not user_id:
-            return {"error": "AVITO_USER_ID not set"}
-
-        cache_key = f"stats:{date_from}:{date_to}:{len(item_ids) if item_ids else 'all'}"
-        cached = self._cache_get(cache_key)
-        if cached:
-            return cached
-
-        # Auto-load ALL active item IDs (with pagination)
-        if not item_ids:
-            items_data = await self.get_items_list(max_items=2000, status="active")
-            if "error" in items_data:
-                return items_data
-            item_ids = [it["id"] for it in items_data.get("items", [])]
-            if not item_ids:
-                return {"error": "Нет активных объявлений"}
-
-        # Batch by 200 (API limit) + aggregate
-        items_stats: List[Dict[str, Any]] = []
-        total_views = total_uniq_views = total_contacts = total_favorites = 0
         BATCH = 200
+
+        items_stats: List[Dict[str, Any]] = []
+        # per-day aggregation across all items
+        daily: Dict[str, Dict[str, int]] = {}
+        total_views = total_uniq_views = total_contacts = total_favorites = 0
 
         for i in range(0, len(item_ids), BATCH):
             payload = {
@@ -340,14 +337,22 @@ class AvitoClient:
 
             for item in data.get("result", {}).get("items", []):
                 s = item.get("stats", [])
-                v = sum(d.get("views", 0) for d in s)
-                u = sum(d.get("uniqViews", 0) for d in s)
-                c = sum(d.get("uniqContacts", 0) for d in s)
-                f = sum(d.get("uniqFavorites", 0) for d in s)
-                total_views += v
-                total_uniq_views += u
-                total_contacts += c
-                total_favorites += f
+                v = u = c = f = 0
+                for day in s:
+                    dv = day.get("views", 0)
+                    du = day.get("uniqViews", 0)
+                    dc = day.get("uniqContacts", 0)
+                    df = day.get("uniqFavorites", 0)
+                    v += dv; u += du; c += dc; f += df
+                    date_key = day.get("date")
+                    if date_key:
+                        bucket = daily.setdefault(date_key, {"views": 0, "uniq_views": 0, "contacts": 0, "favorites": 0})
+                        bucket["views"] += dv
+                        bucket["uniq_views"] += du
+                        bucket["contacts"] += dc
+                        bucket["favorites"] += df
+
+                total_views += v; total_uniq_views += u; total_contacts += c; total_favorites += f
                 if v or c:
                     items_stats.append({
                         "item_id": item.get("itemId"),
@@ -355,18 +360,105 @@ class AvitoClient:
                     })
 
         items_stats.sort(key=lambda x: x["views"], reverse=True)
+        daily_sorted = [{"date": k, **v} for k, v in sorted(daily.items())]
 
-        result = {
-            "date_from": date_from,
-            "date_to": date_to,
-            "items_total": len(item_ids),
-            "items_with_activity": len(items_stats),
+        return {
             "total_views": total_views,
             "total_uniq_views": total_uniq_views,
             "total_contacts": total_contacts,
             "total_favorites": total_favorites,
+            "by_day": daily_sorted,
+            "items_with_activity": len(items_stats),
             "top_items": items_stats[:30],
-            "note": "uniqContacts = обращения клиентов (звонки + сообщения). Реальный коллтрекинг (запись звонков) у вас отключён — отдельный платный сервис.",
+        }
+
+    async def get_items_stats(
+        self,
+        date_from: str,
+        date_to: str,
+        item_ids: Optional[List[int]] = None,
+        compare_previous: bool = True,
+    ) -> Dict[str, Any]:
+        """Stats by ad: views / uniqViews / uniqContacts / uniqFavorites.
+
+        Возвращает:
+          - totals (views/uniqViews/contacts/favorites) за период
+          - by_day: дневной breakdown
+          - top_items: топ-30 объявлений по views
+          - previous_period: те же totals за предыдущий период равной длины (для сравнения)
+
+        ВАЖНО:
+        - Даты dateFrom/dateTo интерпретируются Avito API как сутки MSK (UTC+3).
+        - uniqContacts = обращения клиентов (Позвонить + Написать). Это и есть
+          "Контакты" в кабинете Avito Pro. Реальный коллтрекинг отключён.
+        - Цифры из API считаются ТОЛЬКО по активным сейчас объявлениям и могут
+          отличаться от кабинета на ~15-20% (кабинет также включает показы в выдаче).
+        """
+        if not self.enabled:
+            return {"error": "Avito not configured"}
+
+        user_id = settings.avito_user_id
+        if not user_id:
+            return {"error": "AVITO_USER_ID not set"}
+
+        cache_key = f"stats:{date_from}:{date_to}:{len(item_ids) if item_ids else 'all'}:cmp={compare_previous}"
+        cached = self._cache_get(cache_key)
+        if cached:
+            return cached
+
+        # Auto-load ALL active item IDs (with pagination)
+        if not item_ids:
+            items_data = await self.get_items_list(max_items=2000, status="active")
+            if "error" in items_data:
+                return items_data
+            item_ids = [it["id"] for it in items_data.get("items", [])]
+            if not item_ids:
+                return {"error": "Нет активных объявлений"}
+
+        current = await self._fetch_stats_aggregate(date_from, date_to, item_ids)
+        if "error" in current:
+            return current
+
+        previous: Optional[Dict[str, Any]] = None
+        if compare_previous:
+            try:
+                d_from = datetime.strptime(date_from, "%Y-%m-%d")
+                d_to = datetime.strptime(date_to, "%Y-%m-%d")
+                span_days = (d_to - d_from).days + 1
+                prev_to = msk_date_shift(date_from, -1)
+                prev_from = msk_date_shift(prev_to, -(span_days - 1))
+                prev_data = await self._fetch_stats_aggregate(prev_from, prev_to, item_ids)
+                if "error" not in prev_data:
+                    previous = {
+                        "date_from": prev_from,
+                        "date_to": prev_to,
+                        "total_views": prev_data["total_views"],
+                        "total_uniq_views": prev_data["total_uniq_views"],
+                        "total_contacts": prev_data["total_contacts"],
+                        "total_favorites": prev_data["total_favorites"],
+                    }
+            except Exception as e:
+                logger.warning("avito previous-period compare failed", error=str(e))
+
+        result = {
+            "date_from": date_from,
+            "date_to": date_to,
+            "timezone": "Europe/Moscow (MSK, UTC+3)",
+            "items_total": len(item_ids),
+            "items_with_activity": current["items_with_activity"],
+            "total_views": current["total_views"],
+            "total_uniq_views": current["total_uniq_views"],
+            "total_contacts": current["total_contacts"],
+            "total_favorites": current["total_favorites"],
+            "by_day": current["by_day"],
+            "top_items": current["top_items"],
+            "previous_period": previous,
+            "note": (
+                "Даты считаются в MSK. uniqContacts = клики 'Позвонить' + 'Написать' "
+                "(в кабинете Avito Pro это столбец 'Контакты'). Цифры считаются по "
+                "активным сейчас объявлениям — могут отличаться от кабинета на 15-20% "
+                "(кабинет шире, включает показы в выдаче и архивные объявления)."
+            ),
         }
         self._cache_set(cache_key, result)
         return result
