@@ -483,5 +483,28 @@ def get_tools_definitions():
                 },
                 "required": ["date_from", "date_to"]
             }
+        },
+        {
+            "name": "avito_funnel",
+            "description": (
+                "Главный tool для ROI/окупаемости Avito. Связывает 4 источника данных:\n"
+                "1) Расход на Avito (avito_spend) — сколько потратили\n"
+                "2) Обращения в Avito (avito_stats: uniqContacts) — клики «Позвонить/Написать»\n"
+                "3) Лиды в Bitrix24 с источником Avito (по SOURCE_ID + phone_pool)\n"
+                "4) Сделки в Bitrix24 с источником Avito (won + сумма)\n\n"
+                "Возвращает воронку и расчёты: CPL (cost-per-lead), CAC (cost-of-acquisition), "
+                "ROI, конверсии contact→lead и lead→deal.\n\n"
+                "ИСПОЛЬЗУЙ ВСЕГДА когда пользователь спрашивает: «окупается ли Avito», "
+                "«сколько лидов с Avito», «выручка с Avito», «ROI Avito», «эффективность Avito». "
+                "Намного полезнее чем avito_spend + avito_stats по отдельности."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "date_from": {"type": "string", "description": "YYYY-MM-DD"},
+                    "date_to": {"type": "string", "description": "YYYY-MM-DD"}
+                },
+                "required": ["date_from", "date_to"]
+            }
         }
     ]
