@@ -64,9 +64,19 @@ class Settings(BaseSettings):
     # Circuit breaker — Level 3 (global daily)
     daily_global_credits_limit: float = 5000.0  # ~$25 at 1cr=$0.005
 
+    # Dashboard (HTTP-сервис для внешних специалистов по трафику).
+    # Поля читаются через os.getenv в main.py/dashboard/app.py, но должны
+    # быть объявлены здесь, иначе pydantic-settings отклонит .env.
+    dashboard_enabled: str = "1"
+    dashboard_host: str = "0.0.0.0"
+    dashboard_port: int = 8001
+    dashboard_refresh_minutes: int = 5
+    dashboard_token: str = ""
+
     class Config:
         env_file = ".env"
         case_sensitive = False
+        extra = "ignore"
 
     @property
     def b24_portal_url(self) -> str:
