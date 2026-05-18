@@ -30,6 +30,14 @@ class Settings(BaseSettings):
     # Google Sheets (optional). Service account JSON path. SA must have read access to the sheet.
     google_sa_path: str = "/opt/crm-bot/secrets/google_sa.json"
 
+    # Scheduled reports (sent to a Telegram chat at fixed cron times).
+    # Override via .env. Empty REPORTS_CHAT_ID disables the scheduler.
+    reports_enabled: bool = True
+    reports_chat_id: int = 0   # e.g. -1003939434094
+    reports_timezone: str = "Europe/Moscow"
+    reports_daily_hour: int = 9
+    reports_daily_minute: int = 0
+
     # Which provider to use for LLM calls: "kie" or "deepseek"
     llm_provider: str = "kie"
 

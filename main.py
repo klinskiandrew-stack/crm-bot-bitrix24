@@ -6,6 +6,7 @@ from config import settings
 from db.connection import db
 from bot.dispatcher import create_dispatcher
 from bot.utils import get_proxy_config
+from reports.scheduler import start_report_scheduler
 import structlog
 
 # Configure logging
@@ -43,12 +44,17 @@ async def main():
     # Create dispatcher and start polling
     dp = create_dispatcher()
 
+    # Scheduled reports (daily/weekly/monthly) — runs in the same event loop
+    scheduler = start_report_scheduler(bot)
+
     try:
         logger.info("Starting bot polling")
         await dp.start_polling(bot)
     except Exception as e:
         logger.error("Bot polling error", error=str(e))
     finally:
+        if scheduler:
+            scheduler.shutdown(wait=False)
         await db.close()
         await bot.session.close()
         logger.info("Bot shutdown")

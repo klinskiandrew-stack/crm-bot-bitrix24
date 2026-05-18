@@ -1,10 +1,14 @@
 from aiogram import Router, types, F, Bot
+from aiogram.enums import ParseMode
 from aiogram.filters import Command
+from datetime import date, timedelta
 import structlog
 from config import settings
 from db.repositories import audit as audit_repo, settings as settings_repo
 from ai.router import router as model_router
 from bot.keyboards.admin import get_admin_main_menu
+from b24.client import Bitrix24Client
+from reports.builder import build_daily_report, build_period_report
 
 logger = structlog.get_logger()
 
@@ -107,6 +111,61 @@ async def stats_command(message: types.Message, user_context: dict = None):
     except Exception as e:
         logger.error("Error getting stats", error=str(e))
         await message.answer(f"Ошибка при получении статистики: {str(e)}")
+
+
+@router.message(Command("report_now"))
+async def report_now_command(message: types.Message, user_context: dict = None):
+    """Build and post a report on demand.
+
+    /report_now              — daily for yesterday into REPORTS_CHAT_ID
+    /report_now daily        — same as above
+    /report_now weekly       — previous Mon-Sun week
+    /report_now monthly      — previous calendar month
+    /report_now here         — daily, but reply into THIS chat (for testing)
+    """
+    if not is_admin(user_context):
+        await message.answer("Доступ запрещен.")
+        return
+
+    args = (message.text or "").split()
+    kind = args[1].lower() if len(args) > 1 else "daily"
+
+    target_chat = message.chat.id if "here" in args else settings.reports_chat_id
+    if not target_chat:
+        await message.answer("REPORTS_CHAT_ID не настроен. Используй `/report_now here` для проверки в этом чате.")
+        return
+
+    await message.answer(f"⏳ Собираю отчёт ({kind})...")
+
+    b24 = Bitrix24Client()
+    try:
+        if kind in ("daily", "here"):
+            text = await build_daily_report(b24, date.today() - timedelta(days=1))
+        elif kind == "weekly":
+            today = date.today()
+            offset = (today.weekday() + 7) if today.weekday() == 0 else today.weekday()
+            last_mon = today - timedelta(days=offset)
+            last_sun = last_mon + timedelta(days=6)
+            text = await build_period_report(b24, last_mon, last_sun, "Еженедельный отчёт")
+        elif kind == "monthly":
+            today = date.today()
+            first_this = today.replace(day=1)
+            last_prev = first_this - timedelta(days=1)
+            first_prev = last_prev.replace(day=1)
+            text = await build_period_report(b24, first_prev, last_prev, "Ежемесячный отчёт")
+        else:
+            await message.answer("Использование: /report_now [daily|weekly|monthly] [here]")
+            return
+    finally:
+        if b24._session and not b24._session.closed:
+            await b24._session.close()
+
+    # Send (chunked if needed)
+    for i in range(0, len(text), 4000):
+        await message.bot.send_message(target_chat, text[i:i + 4000], parse_mode=ParseMode.HTML)
+
+    if target_chat != message.chat.id:
+        await message.answer(f"✅ Отчёт отправлен в чат {target_chat}")
 
 
 @router.message(Command("errors"))

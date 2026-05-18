@@ -2,14 +2,15 @@
 # Этот файл редактируется руками — бот подхватывает изменения при рестарте.
 # Если появился новый номер / новый источник — добавь строку и `systemctl restart crm-bot`.
 #
+# Ключ записи (заглавия) — короткое отображаемое имя, используется в отчётах.
 # Каждая запись:
 #   bitrix_source_ids   — список SOURCE_ID в Bitrix (точное совпадение)
 #   phone_pool          — телефоны, входящие звонки на которые тоже относятся к этому каналу
 #                         (бот ищет эти номера в TITLE лида через подстроку)
 #   utm_rules           — UTM-условия (опционально), которые подтверждают канал даже при WEB source
-#   description         — пояснение для модели (что входит, как трактовать)
+#   description         — пояснение для модели
 
-авито:
+Авито:
   bitrix_source_ids:
     - "1|AVITO"           # Avito - Открытая линия
     - "4"                  # Звонок на 79315217809 — Авито
@@ -21,7 +22,7 @@
     - "79315217809"
   description: "Авито — открытая линия и два телефонных пула (931 105-18-70, 931 521-78-09)"
 
-сайт-сео:
+SEO:
   bitrix_source_ids:
     - "WEBFORM"            # CRM-форма
     - "UC_BSFU8L"          # growzone.ru - Воплотим мечты
@@ -40,49 +41,65 @@
     - "78003331245"
   description: "Основной сайт growzone.ru — SEO трафик (без UTM). Все формы и страницы основного сайта + два телефонных пула."
 
-яндекс-директ:
+Яндекс:
   bitrix_source_ids:
     - "WEB"                # Веб-сайт (если есть UTM yandex/cpc — это Директ)
   utm_rules:
     utm_source_in: ["yandex"]
-    # ИЛИ utm_medium_in: ["cpc"]
   description: "Платная реклама Яндекс.Директ. SOURCE_ID=WEB + UTM_SOURCE=yandex (или UTM_MEDIUM=cpc). Если SOURCE_ID=WEB БЕЗ UTM — это редкость, считай как Веб-сайт без атрибуции."
 
-вконтакте:
+ВКонтакте:
   bitrix_source_ids:
     - "6"
 
-профи-ру:
+Профи.ру:
   bitrix_source_ids:
     - "7"
 
-яндекс-услуги:
+Яндекс Услуги:
   bitrix_source_ids:
     - "UC_HKYH6T"
 
-мессенджеры:
+WhatsApp:
   bitrix_source_ids:
-    - "5|ANK_CHATS_APP24_WHATSAPP"      # WhatsApp
-    - "1|ANK_CHATS_APP24_WHATSAPP"      # WhatsApp WABA
-    - "11|ANK_CHATS_APP24_WHATS_APP"    # WhatsApp waba
-    - "10"                                # ChatApp Telegram
-    - "9|ANK_CHATS_APP24_TELEGRAM"      # Telegram personal
-    - "13|ANK_CHATS_APP24_MAX"          # Max
-    - "15|ANK_CHATS_APP24_MAX"          # Резервная Макс
-    - "19|ANK_CHATS_APP24_MAX"          # Макс 3
-  description: "Все мессенджеры (WhatsApp, Telegram, Max). Можешь группировать по каналу если спросят явно."
+    - "5|ANK_CHATS_APP24_WHATSAPP"
+    - "1|ANK_CHATS_APP24_WHATSAPP"
+    - "11|ANK_CHATS_APP24_WHATS_APP"
 
-партнерские:
+Telegram:
+  bitrix_source_ids:
+    - "10"
+    - "9|ANK_CHATS_APP24_TELEGRAM"
+
+Max:
+  bitrix_source_ids:
+    - "13|ANK_CHATS_APP24_MAX"
+    - "15|ANK_CHATS_APP24_MAX"
+    - "19|ANK_CHATS_APP24_MAX"
+
+Перехват:
+  bitrix_source_ids:
+    - "8"
+  description: "Перехват конкурентов"
+
+Звонок:
+  bitrix_source_ids:
+    - "CALL"
+  description: "Звонок без привязки к телефонному пулу"
+
+Рекомендация:
+  bitrix_source_ids:
+    - "RECOMMENDATION"
+
+Партнёры:
   bitrix_source_ids:
     - "PARTNER"
     - "2"
-    - "RECOMMENDATION"
     - "REPEAT_SALE"
-  description: "Партнёрский / повторные / по рекомендации — не платный трафик"
+  description: "Существующий клиент / партнёр / повторные продажи"
 
-прочее:
+Прочее:
   bitrix_source_ids:
-    - "8"                  # Перехват конкурентов
     - "BOOKING"
     - "UC_54XMVB"          # Автообзвон
     - "EMAIL"
@@ -92,4 +109,3 @@
     - "OTHER"
     - "TRADE_SHOW"
     - "9"                  # Пиксель
-    - "CALL"               # звонок без привязки к пулу
