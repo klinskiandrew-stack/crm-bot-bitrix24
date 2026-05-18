@@ -226,6 +226,55 @@ curl -X POST https://YOUR-PORTAL.bitrix24.ru/rest/1/YOUR_TOKEN/crm.deal.list.jso
 
 ---
 
+## 🌐 Дашборд для специалистов по трафику (порт 8001)
+
+После запуска бота автоматически поднимается HTTP-дашборд для VK-специалистов
+(и других внешних людей, которым нужна видимость лидов без доступа к CRM).
+
+```bash
+# Открыть порт 8001 в firewall (если ufw активен)
+sudo ufw allow 8001/tcp
+
+# Проверить что сервер слушает
+curl -s http://localhost:8001/healthz
+# Должно вернуть: {"ok": true, "last_refresh": "...", "leads": N, "deals": N}
+```
+
+**Ссылка для VK-специалистов:**
+```
+http://31.130.135.86:8001/dashboard/vk
+```
+
+### Опциональная защита токеном
+
+В `/opt/crm-bot/.env` добавьте:
+```
+DASHBOARD_TOKEN=сложный_пароль_тут
+```
+
+Тогда ссылка будет:
+```
+http://31.130.135.86:8001/dashboard/vk?token=сложный_пароль_тут
+```
+
+После любого изменения `.env` — `sudo systemctl restart crm-bot`.
+
+### Опциональный HTTPS через nginx
+
+Если есть домен — поставьте nginx и proxy_pass на 127.0.0.1:8001.
+Без домена тоже работает по IP+порту.
+
+### Управление дашбордом
+
+| Действие | Команда |
+|---|---|
+| Принудительное обновление | `curl -X POST http://localhost:8001/api/vk-refresh` |
+| Сырые данные JSON | `curl http://localhost:8001/api/vk-leads` |
+| Логи дашборда | `sudo journalctl -u crm-bot \| grep -i dashboard` |
+| Выключить | `DASHBOARD_ENABLED=0` в `.env` → restart |
+
+---
+
 ## 📞 Техническая поддержка
 
 Если нужна помощь, проверьте:

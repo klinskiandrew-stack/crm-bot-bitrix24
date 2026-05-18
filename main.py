@@ -7,6 +7,8 @@ from db.connection import db
 from bot.dispatcher import create_dispatcher
 from bot.utils import get_proxy_config
 from reports.scheduler import start_report_scheduler
+from dashboard.app import start_dashboard_server, stop_dashboard_server
+import os
 import structlog
 
 # Configure logging
@@ -47,6 +49,22 @@ async def main():
     # Scheduled reports (daily/weekly/monthly) — runs in the same event loop
     scheduler = start_report_scheduler(bot)
 
+    # Dashboard HTTP server (для VK-специалистов, etc.) — тот же event loop
+    dashboard_runner = None
+    dashboard_scheduler = None
+    if os.getenv("DASHBOARD_ENABLED", "1") != "0":
+        try:
+            dashboard_host = os.getenv("DASHBOARD_HOST", "0.0.0.0")
+            dashboard_port = int(os.getenv("DASHBOARD_PORT", "8001"))
+            dashboard_refresh = int(os.getenv("DASHBOARD_REFRESH_MINUTES", "5"))
+            dashboard_runner, dashboard_scheduler = await start_dashboard_server(
+                host=dashboard_host,
+                port=dashboard_port,
+                refresh_minutes=dashboard_refresh,
+            )
+        except Exception as e:
+            logger.error("Failed to start dashboard server", error=str(e))
+
     try:
         logger.info("Starting bot polling")
         await dp.start_polling(bot)
@@ -55,6 +73,8 @@ async def main():
     finally:
         if scheduler:
             scheduler.shutdown(wait=False)
+        if dashboard_runner and dashboard_scheduler:
+            await stop_dashboard_server(dashboard_runner, dashboard_scheduler)
         await db.close()
         await bot.session.close()
         logger.info("Bot shutdown")
