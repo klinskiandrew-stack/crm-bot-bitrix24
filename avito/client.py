@@ -237,33 +237,48 @@ class AvitoClient:
             "operations": ops[:20],
         }
 
-    async def get_items_list(self, per_page: int = 50) -> Dict[str, Any]:
-        """List active items (ads)."""
+    async def get_items_list(self, max_items: int = 500, status: str = "active") -> Dict[str, Any]:
+        """List items (ads) с пагинацией. По умолчанию active.
+
+        Args:
+            max_items: hard limit (защита от runaway больших аккаунтов)
+            status: 'active' (по умолчанию) | 'removed' | 'blocked' | '' для всех
+        """
         if not self.enabled:
             return {"error": "Avito not configured"}
 
-        cache_key = f"items:{per_page}"
+        cache_key = f"items:{status}:{max_items}"
         cached = self._cache_get(cache_key)
         if cached:
             return cached
 
-        params = {"page": 1, "per_page": min(per_page, 100), "status": "active"}
-        data = await self._request("GET", "/core/v1/items", params=params)
-        if "error" in data:
-            return data
+        items: List[Dict[str, Any]] = []
+        page = 1
+        while len(items) < max_items:
+            params = {"page": page, "per_page": 100}
+            if status:
+                params["status"] = status
+            data = await self._request("GET", "/core/v1/items", params=params)
+            if "error" in data:
+                return data
+            chunk = data.get("resources", [])
+            if not chunk:
+                break
+            for r in chunk:
+                items.append({
+                    "id": r.get("id"),
+                    "title": r.get("title"),
+                    "price": r.get("price"),
+                    "status": r.get("status"),
+                    "address": r.get("address"),
+                    "category": (r.get("category") or {}).get("name"),
+                    "url": r.get("url"),
+                })
+            if len(chunk) < 100:
+                break
+            page += 1
 
-        items = []
-        for r in data.get("resources", []):
-            items.append({
-                "id": r.get("id"),
-                "title": r.get("title"),
-                "price": r.get("price"),
-                "status": r.get("status"),
-                "address": r.get("address"),
-                "category": (r.get("category") or {}).get("name"),
-                "url": r.get("url"),
-            })
-        result = {"total": len(items), "items": items}
+        result = {"total": len(items), "items": items[:max_items]}
         self._cache_set(cache_key, result)
         return result
 
@@ -275,7 +290,12 @@ class AvitoClient:
     ) -> Dict[str, Any]:
         """Stats by ad: views / uniqViews / uniqContacts / uniqFavorites.
 
-        If item_ids not provided, auto-fetches active ads list first.
+        ВАЖНО:
+        - "uniqContacts" — это ОБРАЩЕНИЯ от клиентов (нажатия "Позвонить" + "Написать").
+          Это и есть то, что в кабинете Avito показывается как "Контакты". Реальный
+          коллтрекинг (запись звонков) — отдельная платная услуга, у Growzone отключена.
+        - Auto-fetches all active items (с пагинацией) если item_ids не указан.
+        - Batch'ит запросы по 200 itemIds (API limit).
         """
         if not self.enabled:
             return {"error": "Avito not configured"}
@@ -284,70 +304,69 @@ class AvitoClient:
         if not user_id:
             return {"error": "AVITO_USER_ID not set"}
 
-        cache_key = f"stats:{date_from}:{date_to}:{item_ids}"
+        cache_key = f"stats:{date_from}:{date_to}:{len(item_ids) if item_ids else 'all'}"
         cached = self._cache_get(cache_key)
         if cached:
             return cached
 
-        # Auto-load item IDs if not given
+        # Auto-load ALL active item IDs (with pagination)
         if not item_ids:
-            items_data = await self.get_items_list(per_page=100)
+            items_data = await self.get_items_list(max_items=2000, status="active")
             if "error" in items_data:
                 return items_data
             item_ids = [it["id"] for it in items_data.get("items", [])]
             if not item_ids:
                 return {"error": "Нет активных объявлений"}
 
-        # API limit: max 200 item IDs per request
-        payload = {
-            "dateFrom": date_from,
-            "dateTo": date_to,
-            "fields": ["views", "uniqViews", "uniqContacts", "uniqFavorites"],
-            "itemIds": item_ids[:200],
-        }
-        data = await self._request(
-            "POST",
-            f"/stats/v1/accounts/{user_id}/items",
-            data=json.dumps(payload),
-        )
-        if "error" in data:
-            return data
-
-        # Aggregate
-        items_stats = []
+        # Batch by 200 (API limit) + aggregate
+        items_stats: List[Dict[str, Any]] = []
         total_views = total_uniq_views = total_contacts = total_favorites = 0
-        for item in data.get("result", {}).get("items", []):
-            views = sum(d.get("views", 0) for d in item.get("stats", []))
-            uniq_views = sum(d.get("uniqViews", 0) for d in item.get("stats", []))
-            contacts = sum(d.get("uniqContacts", 0) for d in item.get("stats", []))
-            favorites = sum(d.get("uniqFavorites", 0) for d in item.get("stats", []))
+        BATCH = 200
 
-            total_views += views
-            total_uniq_views += uniq_views
-            total_contacts += contacts
-            total_favorites += favorites
+        for i in range(0, len(item_ids), BATCH):
+            payload = {
+                "dateFrom": date_from,
+                "dateTo": date_to,
+                "fields": ["views", "uniqViews", "uniqContacts", "uniqFavorites"],
+                "itemIds": item_ids[i:i + BATCH],
+            }
+            data = await self._request(
+                "POST",
+                f"/stats/v1/accounts/{user_id}/items",
+                data=json.dumps(payload),
+            )
+            if "error" in data:
+                return data
 
-            if views or contacts:
-                items_stats.append({
-                    "item_id": item.get("itemId"),
-                    "views": views,
-                    "uniq_views": uniq_views,
-                    "contacts": contacts,
-                    "favorites": favorites,
-                })
+            for item in data.get("result", {}).get("items", []):
+                s = item.get("stats", [])
+                v = sum(d.get("views", 0) for d in s)
+                u = sum(d.get("uniqViews", 0) for d in s)
+                c = sum(d.get("uniqContacts", 0) for d in s)
+                f = sum(d.get("uniqFavorites", 0) for d in s)
+                total_views += v
+                total_uniq_views += u
+                total_contacts += c
+                total_favorites += f
+                if v or c:
+                    items_stats.append({
+                        "item_id": item.get("itemId"),
+                        "views": v, "uniq_views": u, "contacts": c, "favorites": f,
+                    })
 
-        # Sort by views desc
         items_stats.sort(key=lambda x: x["views"], reverse=True)
 
         result = {
             "date_from": date_from,
             "date_to": date_to,
+            "items_total": len(item_ids),
+            "items_with_activity": len(items_stats),
             "total_views": total_views,
             "total_uniq_views": total_uniq_views,
             "total_contacts": total_contacts,
             "total_favorites": total_favorites,
-            "items_count": len(items_stats),
-            "items": items_stats[:30],  # top 30
+            "top_items": items_stats[:30],
+            "note": "uniqContacts = обращения клиентов (звонки + сообщения). Реальный коллтрекинг (запись звонков) у вас отключён — отдельный платный сервис.",
         }
         self._cache_set(cache_key, result)
         return result
@@ -358,10 +377,11 @@ class AvitoClient:
         date_to: str,
         limit: int = 50,
     ) -> Dict[str, Any]:
-        """Calls from calltracking (phone calls to ads).
+        """Calltracking calls (записи реальных звонков).
 
-        Args:
-            date_from, date_to: YYYY-MM-DD
+        У Growzone коллтрекинг ОТКЛЮЧЁН (платная услуга Avito Pro), поэтому
+        endpoint всегда вернёт пустой список. Если нужна метрика обращений —
+        используй get_items_stats (uniqContacts = звонки + сообщения).
         """
         if not self.enabled:
             return {"error": "Avito not configured"}
@@ -391,6 +411,12 @@ class AvitoClient:
             "total_calls": len(calls),
             "calls": calls[:limit],
         }
+        if not calls:
+            result["note"] = (
+                "Коллтрекинг (запись реальных звонков) отключён в кабинете Avito Pro — "
+                "это отдельный платный сервис. Для метрики обращений используй avito_stats: "
+                "uniqContacts = клики 'Позвонить' + 'Написать'."
+            )
         self._cache_set(cache_key, result)
         return result
 
