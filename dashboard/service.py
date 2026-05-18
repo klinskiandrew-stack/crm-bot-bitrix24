@@ -24,13 +24,14 @@ logger = structlog.get_logger()
 _MSK = timezone(timedelta(hours=3))
 
 
-# Сколько дней назад считать "актуальными" лидами. 90 дней — компромисс между
-# полнотой истории и размером ответа. Меняется через DASHBOARD_LOOKBACK_DAYS.
-DEFAULT_LOOKBACK_DAYS = 90
+# Сколько дней назад считать "актуальными" лидами. 365 дней — даём
+# фронту достаточно данных, чтобы пользователь крутил период от 7 дней
+# до года без перезапроса.
+DEFAULT_LOOKBACK_DAYS = 365
 
 # Сколько лидов максимум вытащить за обновление (страничный лимит).
-LEAD_FETCH_LIMIT = 500
-DEAL_FETCH_LIMIT = 200
+LEAD_FETCH_LIMIT = 1000
+DEAL_FETCH_LIMIT = 500
 
 # Сколько последних карточек подгружать с комментариями сразу (остальные —
 # по клику в UI через /api/vk-lead/.../comments).
@@ -71,6 +72,10 @@ class CacheState:
     deal_stages: Dict[str, str] = field(default_factory=dict)
     # Карта user_id -> ФИО менеджера
     users: Dict[int, str] = field(default_factory=dict)
+    # Карта webform_id (str) -> название CRM-формы
+    webforms: Dict[str, str] = field(default_factory=dict)
+    # Карта source_id -> человекочитаемое имя источника Bitrix (для табл "Источник")
+    source_names: Dict[str, str] = field(default_factory=dict)
     last_refresh: Optional[datetime] = None
     last_error: Optional[str] = None
 
@@ -210,7 +215,7 @@ class VKDashboardService:
         self.state.comments = new_comments
 
     async def _refresh_status_maps(self, b24: Bitrix24Client) -> None:
-        """Подтягивает имена стадий лидов и сделок из Bitrix."""
+        """Подтягивает имена стадий лидов и сделок + CRM-форм + источников."""
         # Лиды
         resp = await b24._call("crm.status.list", {"filter": {"ENTITY_ID": "STATUS"}})
         if isinstance(resp, dict) and "result" in resp and isinstance(resp["result"], list):
@@ -226,6 +231,28 @@ class VKDashboardService:
                 str(s.get("STATUS_ID")): str(s.get("NAME") or s.get("STATUS_ID"))
                 for s in stages
             }
+
+        # Источники (SOURCE_ID → имя). Берём из CRM-статусов с ENTITY_ID=SOURCE.
+        src_resp = await b24._call("crm.status.list", {"filter": {"ENTITY_ID": "SOURCE"}})
+        if isinstance(src_resp, dict) and isinstance(src_resp.get("result"), list):
+            self.state.source_names = {
+                str(s.get("STATUS_ID")): str(s.get("NAME") or s.get("STATUS_ID"))
+                for s in src_resp["result"]
+            }
+
+        # CRM-формы. crm.webform.list возвращает {ID, NAME, ACTIVE, ...}.
+        wf_resp = await b24._call("crm.webform.list", {})
+        if isinstance(wf_resp, dict):
+            forms = wf_resp.get("result") or []
+            # На некоторых порталах ответ обёрнут в {forms: [...]}
+            if isinstance(forms, dict):
+                forms = forms.get("forms") or []
+            if isinstance(forms, list):
+                self.state.webforms = {
+                    str(f.get("ID") or f.get("id") or ""): str(f.get("NAME") or f.get("name") or "")
+                    for f in forms
+                    if (f.get("ID") or f.get("id"))
+                }
 
     async def _refresh_user_names(
         self, b24: Bitrix24Client, leads: List[Dict[str, Any]], deals: List[Dict[str, Any]]
@@ -262,6 +289,8 @@ class VKDashboardService:
         lead_id = int(lead.get("ID") or 0)
         status_id = lead.get("STATUS_ID") or ""
         manager_id = int(lead.get("ASSIGNED_BY_ID")) if lead.get("ASSIGNED_BY_ID") else None
+        source_id = str(lead.get("SOURCE_ID") or "")
+        webform_id = str(lead.get("WEBFORM_ID") or "")
         return {
             "id": lead_id,
             "title": lead.get("TITLE") or "",
@@ -271,7 +300,11 @@ class VKDashboardService:
             "status_semantic": lead.get("STATUS_SEMANTIC_ID") or "",
             "manager": self.state.users.get(manager_id, "") if manager_id else "",
             "created": lead.get("DATE_CREATE") or "",
+            "source_id": source_id,
+            "source_name": self.state.source_names.get(source_id, source_id),
             "source_description": lead.get("SOURCE_DESCRIPTION") or "",
+            "webform_id": webform_id,
+            "webform_name": self.state.webforms.get(webform_id, "") if webform_id else "",
             "opportunity": float(lead.get("OPPORTUNITY") or 0),
             "utm_source": lead.get("UTM_SOURCE") or "",
             "utm_medium": lead.get("UTM_MEDIUM") or "",
@@ -287,6 +320,7 @@ class VKDashboardService:
         deal_id = int(deal.get("ID") or 0)
         stage_id = deal.get("STAGE_ID") or ""
         manager_id = int(deal.get("ASSIGNED_BY_ID")) if deal.get("ASSIGNED_BY_ID") else None
+        source_id = str(deal.get("SOURCE_ID") or "")
         return {
             "id": deal_id,
             "title": deal.get("TITLE") or "",
@@ -299,6 +333,8 @@ class VKDashboardService:
             "currency": deal.get("CURRENCY_ID") or "RUB",
             "manager": self.state.users.get(manager_id, "") if manager_id else "",
             "created": deal.get("DATE_CREATE") or "",
+            "source_id": source_id,
+            "source_name": self.state.source_names.get(source_id, source_id),
             "source_description": deal.get("SOURCE_DESCRIPTION") or "",
             "utm_source": deal.get("UTM_SOURCE") or "",
             "utm_medium": deal.get("UTM_MEDIUM") or "",

@@ -289,11 +289,20 @@
     </label>
     <label>Период
       <select id="filter-period">
-        <option value="">Все</option>
         <option value="today">Сегодня</option>
         <option value="7">7 дней</option>
         <option value="30">30 дней</option>
+        <option value="90" selected>90 дней</option>
+        <option value="180">180 дней</option>
+        <option value="365">Год</option>
+        <option value="">Всё (до года)</option>
       </select>
+    </label>
+    <label>Форма
+      <select id="filter-webform"><option value="">— все —</option></select>
+    </label>
+    <label>Источник (описание)
+      <select id="filter-source-desc"><option value="">— все —</option></select>
     </label>
   </div>
 
@@ -309,9 +318,11 @@
           <th>Создан</th>
           <th>Лид</th>
           <th>Статус</th>
+          <th>Источник</th>
+          <th>Форма / страница</th>
           <th>Менеджер</th>
           <th>UTM</th>
-          <th>Описание + комментарии</th>
+          <th>Комментарии</th>
         </tr>
       </thead>
       <tbody id="leads-body"></tbody>
@@ -326,6 +337,7 @@
           <th>Сделка</th>
           <th>Стадия</th>
           <th>Сумма</th>
+          <th>Источник</th>
           <th>Менеджер</th>
           <th>UTM</th>
           <th>Комментарии</th>
@@ -383,13 +395,47 @@ function semanticClass(sem) {
   }
 }
 
-function renderStats() {
-  const s = state.data.stats;
+function computeStats(leads, deals) {
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const isToday = r => (r.created || '').slice(0, 10) === todayStr;
+
+  const leadsByStatus = {};
+  for (const l of leads) {
+    const k = l.status_name || '—';
+    leadsByStatus[k] = (leadsByStatus[k] || 0) + 1;
+  }
+  const dealsByStage = {};
+  for (const d of deals) {
+    const k = d.stage_name || '—';
+    dealsByStage[k] = (dealsByStage[k] || 0) + 1;
+  }
+  const wonDeals = deals.filter(d => d.is_won);
+  return {
+    leads_total: leads.length,
+    leads_today: leads.filter(isToday).length,
+    deals_total: deals.length,
+    deals_today: deals.filter(isToday).length,
+    deals_won: wonDeals.length,
+    deals_won_sum: wonDeals.reduce((a, d) => a + (d.opportunity || 0), 0),
+    leads_by_status: leadsByStatus,
+    deals_by_stage: dealsByStage,
+  };
+}
+
+function periodLabel() {
+  const v = document.getElementById('filter-period').value;
+  if (!v) return 'Всё (до года)';
+  if (v === 'today') return 'Сегодня';
+  return `${v} дней`;
+}
+
+function renderStats(filteredLeads, filteredDeals) {
+  const s = computeStats(filteredLeads, filteredDeals);
   const wonSum = s.deals_won_sum ? fmtMoney(s.deals_won_sum) : '—';
   const el = document.getElementById('stats');
   el.innerHTML = `
     <div class="stat">
-      <div class="label">Лиды всего</div>
+      <div class="label">Лиды (в периоде)</div>
       <div class="value">${s.leads_total}</div>
       <div class="sub">Сегодня: ${s.leads_today}</div>
     </div>
@@ -405,21 +451,38 @@ function renderStats() {
     </div>
     <div class="stat">
       <div class="label">Период</div>
-      <div class="value" style="font-size:18px">${state.data.lookback_days} дней</div>
+      <div class="value" style="font-size:18px">${periodLabel()}</div>
       <div class="sub">Источник: ${state.data.source_channel}</div>
     </div>
   `;
+}
 
-  // Заполняем фильтры
-  fillFilterOptions('filter-status', Object.keys(s.leads_by_status));
+function rebuildFilterOptions() {
+  const allLeads = state.data.leads;
+  const allDeals = state.data.deals;
+  const statuses = new Set();
   const campaigns = new Set();
   const managers = new Set();
-  for (const l of state.data.leads.concat(state.data.deals)) {
-    if (l.utm_campaign) campaigns.add(l.utm_campaign);
-    if (l.manager) managers.add(l.manager);
+  const webforms = new Set();
+  const srcDescriptions = new Set();
+  for (const r of allLeads) {
+    if (r.status_name) statuses.add(r.status_name);
+    if (r.utm_campaign) campaigns.add(r.utm_campaign);
+    if (r.manager) managers.add(r.manager);
+    if (r.webform_name) webforms.add(r.webform_name);
+    if (r.source_description) srcDescriptions.add(r.source_description);
   }
+  for (const r of allDeals) {
+    if (r.stage_name) statuses.add(r.stage_name);
+    if (r.utm_campaign) campaigns.add(r.utm_campaign);
+    if (r.manager) managers.add(r.manager);
+    if (r.source_description) srcDescriptions.add(r.source_description);
+  }
+  fillFilterOptions('filter-status', [...statuses].sort());
   fillFilterOptions('filter-utm-campaign', [...campaigns].sort());
   fillFilterOptions('filter-manager', [...managers].sort());
+  fillFilterOptions('filter-webform', [...webforms].sort());
+  fillFilterOptions('filter-source-desc', [...srcDescriptions].sort());
 }
 
 function fillFilterOptions(id, values) {
@@ -436,12 +499,14 @@ function passesFilters(row, isLead) {
   const campaign = document.getElementById('filter-utm-campaign').value;
   const manager = document.getElementById('filter-manager').value;
   const period = document.getElementById('filter-period').value;
+  const webform = document.getElementById('filter-webform').value;
+  const sourceDesc = document.getElementById('filter-source-desc').value;
 
   if (search) {
     const bag = [
       row.title, row.name, row.manager,
       row.utm_source, row.utm_medium, row.utm_campaign, row.utm_content, row.utm_term,
-      row.source_description,
+      row.source_description, row.source_name, row.webform_name,
     ].filter(Boolean).join(' ').toLowerCase();
     if (!bag.includes(search)) return false;
   }
@@ -451,6 +516,8 @@ function passesFilters(row, isLead) {
   }
   if (campaign && row.utm_campaign !== campaign) return false;
   if (manager && row.manager !== manager) return false;
+  if (webform && row.webform_name !== webform) return false;
+  if (sourceDesc && row.source_description !== sourceDesc) return false;
   if (period) {
     if (!row.created) return false;
     const created = new Date(row.created);
@@ -503,11 +570,37 @@ function renderCommentsList(items) {
     </div>`).join('') + '</div>';
 }
 
-function renderLeads() {
+function renderSourceCell(row) {
+  // Что показывать в "Источник":
+  //   1) SOURCE_DESCRIPTION (что менеджер написал в карточке) — приоритет
+  //   2) Человеческое имя SOURCE_ID из Bitrix (например "ВКонтакте")
+  //   3) Сырой SOURCE_ID как fallback
+  const parts = [];
+  const head = row.source_name || row.source_id || '—';
+  parts.push(`<div><b>${escapeHtml(head)}</b></div>`);
+  if (row.source_description) {
+    parts.push(`<div class="description">${escapeHtml(row.source_description)}</div>`);
+  }
+  return parts.join('');
+}
+
+function renderWebformCell(row) {
+  // CRM-форма / страница сайта. Для VK-лидов часто пусто (если пришли
+  // через VK-лидформу или открытую линию). Тогда показываем '—'.
+  if (row.webform_name) {
+    return `<div><b>${escapeHtml(row.webform_name)}</b></div>
+            <div style="color:#9ca3af;font-size:11px">ID ${escapeHtml(row.webform_id)}</div>`;
+  }
+  if (row.webform_id) {
+    return `<div style="color:#6b7280">ID ${escapeHtml(row.webform_id)}</div>`;
+  }
+  return '<span style="color:#9ca3af">—</span>';
+}
+
+function renderLeads(leads) {
   const tbody = document.getElementById('leads-body');
-  const leads = state.data.leads.filter(l => passesFilters(l, true));
   if (!leads.length) {
-    tbody.innerHTML = '<tr><td colspan="6" class="empty">Лидов по фильтру нет</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="8" class="empty">Лидов по фильтру нет</td></tr>';
     return;
   }
   tbody.innerHTML = leads.map(l => `
@@ -518,21 +611,19 @@ function renderLeads() {
         <div style="color:#6b7280;font-size:12px">#${l.id}${l.opportunity ? ' · ' + fmtMoney(l.opportunity) : ''}</div>
       </td>
       <td><span class="status ${semanticClass(l.status_semantic)}">${escapeHtml(l.status_name)}</span></td>
+      <td>${renderSourceCell(l)}</td>
+      <td>${renderWebformCell(l)}</td>
       <td>${escapeHtml(l.manager || '—')}</td>
       <td>${renderUtmChips(l)}</td>
-      <td>
-        ${l.source_description ? `<div class="description">${escapeHtml(l.source_description)}</div>` : ''}
-        ${renderComments(l, 'lead')}
-      </td>
+      <td>${renderComments(l, 'lead')}</td>
     </tr>
   `).join('');
 }
 
-function renderDeals() {
+function renderDeals(deals) {
   const tbody = document.getElementById('deals-body');
-  const deals = state.data.deals.filter(d => passesFilters(d, false));
   if (!deals.length) {
-    tbody.innerHTML = '<tr><td colspan="7" class="empty">Сделок по фильтру нет</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="8" class="empty">Сделок по фильтру нет</td></tr>';
     return;
   }
   tbody.innerHTML = deals.map(d => `
@@ -544,25 +635,26 @@ function renderDeals() {
       </td>
       <td><span class="status ${semanticClass(d.stage_semantic)}">${escapeHtml(d.stage_name)}</span></td>
       <td>${fmtMoney(d.opportunity)}</td>
+      <td>${renderSourceCell(d)}</td>
       <td>${escapeHtml(d.manager || '—')}</td>
       <td>${renderUtmChips(d)}</td>
-      <td>
-        ${d.source_description ? `<div class="description">${escapeHtml(d.source_description)}</div>` : ''}
-        ${renderComments(d, 'deal')}
-      </td>
+      <td>${renderComments(d, 'deal')}</td>
     </tr>
   `).join('');
 }
 
 function render() {
   if (!state.data) return;
+  rebuildFilterOptions();
+  const filteredLeads = state.data.leads.filter(l => passesFilters(l, true));
+  const filteredDeals = state.data.deals.filter(d => passesFilters(d, false));
   document.getElementById('last-refresh').textContent =
     'Обновлено: ' + (state.data.last_refresh ? fmtDate(state.data.last_refresh) : '—') +
-    ' · период: ' + state.data.lookback_days + ' дней' +
+    ' · кэш: ' + state.data.lookback_days + ' дней (Bitrix)' +
     (state.data.last_error ? ' · ошибка: ' + state.data.last_error : '');
-  renderStats();
-  renderLeads();
-  renderDeals();
+  renderStats(filteredLeads, filteredDeals);
+  renderLeads(filteredLeads);
+  renderDeals(filteredDeals);
 }
 
 async function toggleComments(kind, id) {

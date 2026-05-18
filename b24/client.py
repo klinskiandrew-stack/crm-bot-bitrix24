@@ -212,7 +212,7 @@ class Bitrix24Client:
                 "ID", "TITLE", "STATUS_ID", "STATUS_SEMANTIC_ID",
                 "OPPORTUNITY",
                 "DATE_CREATE", "ASSIGNED_BY_ID", "NAME",
-                "SOURCE_ID", "SOURCE_DESCRIPTION",
+                "SOURCE_ID", "SOURCE_DESCRIPTION", "WEBFORM_ID",
                 "UTM_SOURCE", "UTM_MEDIUM", "UTM_CAMPAIGN",
             ]
         }
