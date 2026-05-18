@@ -42,8 +42,8 @@ class Settings(BaseSettings):
     max_session_messages: int = 20
 
     # Circuit breakers — Level 1 (per-request)
-    max_iterations: int = 3
-    max_request_input_tokens: int = 80_000   # cumulative across iterations
+    max_iterations: int = 5
+    max_request_input_tokens: int = 120_000  # cumulative across iterations
     max_request_credits: float = 30.0        # cumulative across iterations
 
     # Circuit breaker — Level 3 (global daily)

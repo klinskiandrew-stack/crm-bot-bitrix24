@@ -33,6 +33,59 @@ class Orchestrator:
         self.max_input_tokens = settings.max_request_input_tokens
         self.max_credits = settings.max_request_credits
         self.tool_definitions = get_tools_definitions()
+        # When cumulative input passes this fraction of the hard limit,
+        # trim old tool_results down to a placeholder. Keeps the most
+        # recent K turns intact so the model still has its working data.
+        self.trim_threshold_ratio = 0.6  # 60% of max_input_tokens
+        self.keep_recent_tool_results = 2  # how many recent results stay full
+
+    def _trim_old_tool_results(self, messages: List[Dict[str, Any]]) -> int:
+        """Replace JSON of old tool_results with short placeholders.
+
+        Each new iteration in the tool-use loop drags ALL prior tool_results
+        back into the API request — context grows linearly per round. After
+        a few rounds the same get_leads JSON has been re-sent 5+ times.
+
+        Strategy: find user-messages whose content is a list of tool_result
+        blocks. Keep the last `keep_recent_tool_results` of them intact;
+        rewrite older ones to a one-line placeholder noting what was there.
+        Returns count of trimmed results."""
+        tool_result_positions = []
+        for idx, msg in enumerate(messages):
+            if msg.get("role") != "user":
+                continue
+            content = msg.get("content")
+            if not isinstance(content, list):
+                continue
+            if all(isinstance(b, dict) and b.get("type") == "tool_result" for b in content):
+                tool_result_positions.append(idx)
+
+        # How many to trim from the start
+        n_to_trim = max(0, len(tool_result_positions) - self.keep_recent_tool_results)
+        if n_to_trim == 0:
+            return 0
+
+        trimmed = 0
+        for pos in tool_result_positions[:n_to_trim]:
+            new_content = []
+            for block in messages[pos]["content"]:
+                # Preserve tool_use_id but shorten content text drastically
+                orig_text = block.get("content", "")
+                if isinstance(orig_text, str) and len(orig_text) > 200:
+                    new_content.append({
+                        "type": "tool_result",
+                        "tool_use_id": block.get("tool_use_id"),
+                        "content": (
+                            f"[old tool_result trimmed to save context — original "
+                            f"was {len(orig_text)} chars. If you need this data, "
+                            f"re-run the tool with the same parameters.]"
+                        ),
+                    })
+                    trimmed += 1
+                else:
+                    new_content.append(block)
+            messages[pos]["content"] = new_content
+        return trimmed
 
     async def get_tools_list(self) -> List[Dict[str, Any]]:
         """Get list of tool definitions for API call."""
@@ -87,8 +140,23 @@ class Orchestrator:
         # actually answered.
         actual_model = model
 
+        trim_at = int(self.max_input_tokens * self.trim_threshold_ratio)
+
         while iteration < self.max_iterations:
             iteration += 1
+
+            # Context-shrinking: if cumulative input is already 60% of the
+            # limit, trim old tool_results to placeholders before the next
+            # round so we don't blow through L1 circuit breaker.
+            if total_input_tokens > trim_at:
+                trimmed = self._trim_old_tool_results(messages)
+                if trimmed:
+                    logger.info(
+                        "Trimmed old tool_results to fit context",
+                        trimmed=trimmed,
+                        total_input_tokens=total_input_tokens,
+                        trim_at=trim_at,
+                    )
 
             try:
                 response = await self.client.send_message(

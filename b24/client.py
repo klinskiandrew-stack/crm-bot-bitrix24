@@ -190,18 +190,18 @@ class Bitrix24Client:
     ) -> List[Dict[str, Any]]:
         """Get leads for assigned users.
 
-        Includes UTM fields by default so reports like 'leads by traffic
-        source' don't need to fan out to get_lead_full per row.
+        Lean select — only fields needed for typical reports. Removed
+        DATE_MODIFY/LAST_NAME/COMPANY_TITLE/CURRENCY_ID/UTM_CONTENT/UTM_TERM
+        to shrink payload ~35%. For full data use get_lead_full per ID.
         """
         params = {
             "filter": {},
             "select": [
                 "ID", "TITLE", "STATUS_ID", "STATUS_SEMANTIC_ID",
-                "OPPORTUNITY", "CURRENCY_ID",
-                "DATE_CREATE", "DATE_MODIFY", "ASSIGNED_BY_ID",
-                "NAME", "LAST_NAME", "COMPANY_TITLE",
+                "OPPORTUNITY",
+                "DATE_CREATE", "ASSIGNED_BY_ID", "NAME",
                 "SOURCE_ID", "SOURCE_DESCRIPTION",
-                "UTM_SOURCE", "UTM_MEDIUM", "UTM_CAMPAIGN", "UTM_CONTENT", "UTM_TERM",
+                "UTM_SOURCE", "UTM_MEDIUM", "UTM_CAMPAIGN",
             ]
         }
 
