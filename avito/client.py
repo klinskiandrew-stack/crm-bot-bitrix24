@@ -440,12 +440,17 @@ class AvitoClient:
             except Exception as e:
                 logger.warning("avito previous-period compare failed", error=str(e))
 
+        active_count = len(item_ids)
+        with_views = current["items_with_activity"]
+        no_views_in_period = active_count - with_views
+
         result = {
             "date_from": date_from,
             "date_to": date_to,
             "timezone": "Europe/Moscow (MSK, UTC+3)",
-            "items_total": len(item_ids),
-            "items_with_activity": current["items_with_activity"],
+            "active_items_count": active_count,
+            "active_items_with_views_in_period": with_views,
+            "active_items_without_views_in_period": no_views_in_period,
             "total_views": current["total_views"],
             "total_uniq_views": current["total_uniq_views"],
             "total_contacts": current["total_contacts"],
@@ -454,10 +459,13 @@ class AvitoClient:
             "top_items": current["top_items"],
             "previous_period": previous,
             "note": (
-                "Даты считаются в MSK. uniqContacts = клики 'Позвонить' + 'Написать' "
-                "(в кабинете Avito Pro это столбец 'Контакты'). Цифры считаются по "
-                "активным сейчас объявлениям — могут отличаться от кабинета на 15-20% "
-                "(кабинет шире, включает показы в выдаче и архивные объявления)."
+                "Даты в MSK. uniqContacts = клики 'Позвонить' + 'Написать'. "
+                "ВАЖНО: 'active_items_without_views_in_period' — это НЕ мёртвые "
+                "объявления. Avito не показывает все 195 объявлений одновременно: "
+                "при широкой географии (десятки городов) алгоритм ротирует выдачу, "
+                "и за неделю физически невозможно покрыть весь склад. Это нормально "
+                "для услуг. 'Мёртвыми' можно назвать объявления без views 3+ месяца "
+                "подряд — за период недели делать такой вывод НЕЛЬЗЯ."
             ),
         }
         self._cache_set(cache_key, result)
