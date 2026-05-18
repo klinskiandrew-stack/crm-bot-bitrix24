@@ -67,11 +67,39 @@ crm-bot/
 ├── bot/                  # Telegram-бот (handlers, middlewares, keyboards)
 ├── ai/                   # AI интеграция (client, tools, orchestrator, router)
 ├── b24/                  # Bitrix24 интеграция (client, rate limiter, methods)
+├── dashboard/            # HTTP-дашборд для внешних специалистов (ВК-трафик и т.п.)
 ├── db/                   # База данных (connection, repositories, schema)
 ├── scripts/              # Утилиты (init_db.py)
 ├── config.py             # Конфигурация (Pydantic Settings)
 └── main.py              # Точка входа
 ```
+
+## Дашборд для внешних специалистов
+
+Модуль `dashboard/` поднимает HTTP-сервер (по умолчанию `0.0.0.0:8001`),
+который показывает лиды и сделки по конкретному источнику трафика
+(сейчас — ВКонтакте, `SOURCE_ID=6` из `config/sources_mapping.yaml`).
+
+- URL: `http://<server-ip>:8001/dashboard/vk`
+- Открытое API: `GET /api/vk-leads`, `POST /api/vk-refresh`,
+  `GET /api/vk-comments/{lead|deal}/{id}`, `GET /healthz`
+- Авто-обновление в UI: 30 сек (клиент), фоновое обновление кэша из
+  Bitrix24: каждые 5 минут (APScheduler в том же процессе, что и бот)
+- Опциональный токен доступа: `DASHBOARD_TOKEN=...` → нужен
+  `?token=...` или заголовок `X-Dashboard-Token`
+
+Настройки в `.env`:
+```
+DASHBOARD_ENABLED=1
+DASHBOARD_HOST=0.0.0.0
+DASHBOARD_PORT=8001
+DASHBOARD_REFRESH_MINUTES=5
+DASHBOARD_TOKEN=
+```
+
+Чтобы добавить новый канал (например, Яндекс.Директ или Авито) —
+скопируйте `dashboard/service.py` или добавьте параметр канала и
+заведите новый эндпоинт `/dashboard/<channel>`.
 
 ## Использование
 

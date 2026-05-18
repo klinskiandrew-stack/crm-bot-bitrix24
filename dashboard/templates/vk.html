@@ -1,0 +1,617 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Дашборд ВКонтакте — Growzone</title>
+<style>
+  :root {
+    --bg: #f5f7fa;
+    --panel: #ffffff;
+    --border: #e3e8ef;
+    --text: #1f2937;
+    --muted: #6b7280;
+    --accent: #4f46e5;
+    --good: #10b981;
+    --warn: #f59e0b;
+    --bad: #ef4444;
+    --chip: #eef2ff;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 14px;
+  }
+  header {
+    background: linear-gradient(135deg, #4f46e5, #7c3aed);
+    color: white;
+    padding: 18px 24px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+  header h1 {
+    margin: 0;
+    font-size: 18px;
+    font-weight: 600;
+  }
+  header .meta {
+    font-size: 12px;
+    opacity: 0.85;
+  }
+  .container {
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: 20px;
+  }
+  .stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 12px;
+    margin-bottom: 20px;
+  }
+  .stat {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px 16px;
+  }
+  .stat .label {
+    color: var(--muted);
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .stat .value {
+    font-size: 26px;
+    font-weight: 600;
+    margin-top: 4px;
+    color: var(--accent);
+  }
+  .stat .sub {
+    font-size: 12px;
+    color: var(--muted);
+    margin-top: 2px;
+  }
+  .filters {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px 16px;
+    margin-bottom: 16px;
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+  .filters input, .filters select {
+    border: 1px solid var(--border);
+    background: white;
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-size: 13px;
+    min-width: 140px;
+  }
+  .filters label {
+    font-size: 12px;
+    color: var(--muted);
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .tabs {
+    display: flex;
+    gap: 4px;
+    margin-bottom: 12px;
+  }
+  .tab {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-bottom: none;
+    border-radius: 6px 6px 0 0;
+    padding: 8px 16px;
+    cursor: pointer;
+    font-size: 14px;
+    color: var(--muted);
+  }
+  .tab.active {
+    background: var(--panel);
+    color: var(--accent);
+    border-bottom: 2px solid var(--accent);
+    font-weight: 600;
+  }
+  table {
+    width: 100%;
+    background: var(--panel);
+    border-collapse: separate;
+    border-spacing: 0;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    font-size: 13px;
+  }
+  thead {
+    background: #f9fafb;
+  }
+  th, td {
+    text-align: left;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+  th {
+    font-weight: 600;
+    color: var(--muted);
+    text-transform: uppercase;
+    font-size: 11px;
+    letter-spacing: 0.5px;
+  }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr:hover { background: #fafbff; }
+  .status {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 500;
+  }
+  .status.success { background: #d1fae5; color: #065f46; }
+  .status.process { background: #fef3c7; color: #92400e; }
+  .status.failed { background: #fee2e2; color: #991b1b; }
+  .status.neutral { background: #e5e7eb; color: #374151; }
+  .utm-chip {
+    display: inline-block;
+    background: var(--chip);
+    color: var(--accent);
+    border-radius: 4px;
+    padding: 1px 6px;
+    margin: 1px 2px 1px 0;
+    font-size: 11px;
+    white-space: nowrap;
+  }
+  .toggle-comments {
+    background: none;
+    border: 1px dashed var(--border);
+    padding: 4px 8px;
+    border-radius: 4px;
+    cursor: pointer;
+    color: var(--muted);
+    font-size: 12px;
+  }
+  .toggle-comments:hover { color: var(--accent); border-color: var(--accent); }
+  .comments-block {
+    margin-top: 8px;
+    background: #fafbff;
+    border-left: 3px solid var(--accent);
+    padding: 8px 10px;
+    border-radius: 4px;
+  }
+  .comment {
+    padding: 6px 0;
+    border-bottom: 1px solid #eef2ff;
+  }
+  .comment:last-child { border-bottom: none; }
+  .comment .author {
+    font-weight: 600;
+    font-size: 12px;
+    color: var(--accent);
+  }
+  .comment .when {
+    color: var(--muted);
+    font-size: 11px;
+    margin-left: 8px;
+  }
+  .comment .text {
+    margin-top: 2px;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .empty {
+    text-align: center;
+    color: var(--muted);
+    padding: 32px 16px;
+  }
+  .refresh-bar {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .btn {
+    background: var(--accent);
+    color: white;
+    border: none;
+    border-radius: 6px;
+    padding: 6px 12px;
+    cursor: pointer;
+    font-size: 12px;
+  }
+  .btn:hover { opacity: 0.9; }
+  .pill {
+    display: inline-block;
+    background: var(--chip);
+    color: var(--accent);
+    border-radius: 10px;
+    padding: 2px 8px;
+    font-size: 11px;
+    margin-right: 6px;
+  }
+  .description {
+    color: var(--muted);
+    font-size: 12px;
+    font-style: italic;
+    margin-top: 4px;
+  }
+  .breakdown {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 6px;
+  }
+  .breakdown .pill { font-size: 11px; }
+  details summary { cursor: pointer; }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>📊 Дашборд ВКонтакте — Growzone CRM</h1>
+    <div class="meta" id="last-refresh">Загрузка…</div>
+  </div>
+  <div class="refresh-bar">
+    <span id="auto-status">Авто-обновление: 30 сек</span>
+    <button class="btn" id="refresh-btn">Обновить сейчас</button>
+  </div>
+</header>
+
+<div class="container">
+
+  <div class="stats" id="stats"></div>
+
+  <div class="filters">
+    <label>Поиск
+      <input type="text" id="filter-search" placeholder="Имя, телефон, UTM…">
+    </label>
+    <label>Статус
+      <select id="filter-status"><option value="">— все —</option></select>
+    </label>
+    <label>UTM campaign
+      <select id="filter-utm-campaign"><option value="">— все —</option></select>
+    </label>
+    <label>Менеджер
+      <select id="filter-manager"><option value="">— все —</option></select>
+    </label>
+    <label>Период
+      <select id="filter-period">
+        <option value="">Все</option>
+        <option value="today">Сегодня</option>
+        <option value="7">7 дней</option>
+        <option value="30">30 дней</option>
+      </select>
+    </label>
+  </div>
+
+  <div class="tabs">
+    <div class="tab active" data-tab="leads">Лиды</div>
+    <div class="tab" data-tab="deals">Сделки</div>
+  </div>
+
+  <div id="tab-leads">
+    <table>
+      <thead>
+        <tr>
+          <th>Создан</th>
+          <th>Лид</th>
+          <th>Статус</th>
+          <th>Менеджер</th>
+          <th>UTM</th>
+          <th>Описание + комментарии</th>
+        </tr>
+      </thead>
+      <tbody id="leads-body"></tbody>
+    </table>
+  </div>
+
+  <div id="tab-deals" style="display:none">
+    <table>
+      <thead>
+        <tr>
+          <th>Создана</th>
+          <th>Сделка</th>
+          <th>Стадия</th>
+          <th>Сумма</th>
+          <th>Менеджер</th>
+          <th>UTM</th>
+          <th>Комментарии</th>
+        </tr>
+      </thead>
+      <tbody id="deals-body"></tbody>
+    </table>
+  </div>
+
+</div>
+
+<script>
+const REFRESH_MS = 30000;
+const state = { data: null, tab: 'leads' };
+
+async function fetchData() {
+  try {
+    const res = await fetch('/api/vk-leads', { cache: 'no-store' });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    state.data = data;
+    render();
+  } catch (e) {
+    console.error(e);
+    document.getElementById('last-refresh').textContent = 'Ошибка загрузки: ' + e.message;
+  }
+}
+
+function escapeHtml(s) {
+  if (s == null) return '';
+  return String(s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#039;');
+}
+
+function fmtDate(s) {
+  if (!s) return '—';
+  // Bitrix отдаёт ISO 8601 с +03:00 — оставляем как есть, режем секунды.
+  const m = s.match(/(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/);
+  if (!m) return s;
+  return `${m[3]}.${m[2]} ${m[4]}:${m[5]}`;
+}
+
+function fmtMoney(n) {
+  if (!n) return '—';
+  return Math.round(n).toLocaleString('ru-RU') + ' ₽';
+}
+
+function semanticClass(sem) {
+  switch ((sem || '').toUpperCase()) {
+    case 'S': return 'success';
+    case 'P': return 'process';
+    case 'F': return 'failed';
+    default: return 'neutral';
+  }
+}
+
+function renderStats() {
+  const s = state.data.stats;
+  const wonSum = s.deals_won_sum ? fmtMoney(s.deals_won_sum) : '—';
+  const el = document.getElementById('stats');
+  el.innerHTML = `
+    <div class="stat">
+      <div class="label">Лиды всего</div>
+      <div class="value">${s.leads_total}</div>
+      <div class="sub">Сегодня: ${s.leads_today}</div>
+    </div>
+    <div class="stat">
+      <div class="label">Сделки</div>
+      <div class="value">${s.deals_total}</div>
+      <div class="sub">Сегодня: ${s.deals_today}</div>
+    </div>
+    <div class="stat">
+      <div class="label">Выиграно</div>
+      <div class="value">${s.deals_won}</div>
+      <div class="sub">${wonSum}</div>
+    </div>
+    <div class="stat">
+      <div class="label">Период</div>
+      <div class="value" style="font-size:18px">${state.data.lookback_days} дней</div>
+      <div class="sub">Источник: ${state.data.source_channel}</div>
+    </div>
+  `;
+
+  // Заполняем фильтры
+  fillFilterOptions('filter-status', Object.keys(s.leads_by_status));
+  const campaigns = new Set();
+  const managers = new Set();
+  for (const l of state.data.leads.concat(state.data.deals)) {
+    if (l.utm_campaign) campaigns.add(l.utm_campaign);
+    if (l.manager) managers.add(l.manager);
+  }
+  fillFilterOptions('filter-utm-campaign', [...campaigns].sort());
+  fillFilterOptions('filter-manager', [...managers].sort());
+}
+
+function fillFilterOptions(id, values) {
+  const el = document.getElementById(id);
+  const current = el.value;
+  el.innerHTML = '<option value="">— все —</option>' +
+    values.map(v => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('');
+  if (values.includes(current)) el.value = current;
+}
+
+function passesFilters(row, isLead) {
+  const search = document.getElementById('filter-search').value.trim().toLowerCase();
+  const status = document.getElementById('filter-status').value;
+  const campaign = document.getElementById('filter-utm-campaign').value;
+  const manager = document.getElementById('filter-manager').value;
+  const period = document.getElementById('filter-period').value;
+
+  if (search) {
+    const bag = [
+      row.title, row.name, row.manager,
+      row.utm_source, row.utm_medium, row.utm_campaign, row.utm_content, row.utm_term,
+      row.source_description,
+    ].filter(Boolean).join(' ').toLowerCase();
+    if (!bag.includes(search)) return false;
+  }
+  if (status) {
+    const rowStatus = isLead ? row.status_name : row.stage_name;
+    if (rowStatus !== status) return false;
+  }
+  if (campaign && row.utm_campaign !== campaign) return false;
+  if (manager && row.manager !== manager) return false;
+  if (period) {
+    if (!row.created) return false;
+    const created = new Date(row.created);
+    const now = new Date();
+    if (period === 'today') {
+      if (created.toDateString() !== now.toDateString()) return false;
+    } else {
+      const days = parseInt(period, 10);
+      const diff = (now - created) / (1000 * 60 * 60 * 24);
+      if (diff > days) return false;
+    }
+  }
+  return true;
+}
+
+function renderUtmChips(row) {
+  const fields = [
+    ['source', row.utm_source],
+    ['medium', row.utm_medium],
+    ['campaign', row.utm_campaign],
+    ['content', row.utm_content],
+    ['term', row.utm_term],
+  ];
+  const chips = fields
+    .filter(([, v]) => v)
+    .map(([k, v]) => `<span class="utm-chip" title="utm_${k}">${escapeHtml(k)}: ${escapeHtml(v)}</span>`)
+    .join('');
+  return chips || '<span style="color:#9ca3af">—</span>';
+}
+
+function renderComments(row, kind) {
+  const items = row.comments || [];
+  const blockId = `comments-${kind}-${row.id}`;
+  const hint = row.comments_cached
+    ? (items.length ? `${items.length} комм.` : 'нет комм.')
+    : 'загрузить комм.';
+  return `
+    <button class="toggle-comments" data-kind="${kind}" data-id="${row.id}">${hint}</button>
+    <div id="${blockId}" style="display:none"></div>
+  `;
+}
+
+function renderCommentsList(items) {
+  if (!items || !items.length) return '<div class="empty" style="padding:8px">Комментариев нет</div>';
+  return '<div class="comments-block">' + items.map(c => `
+    <div class="comment">
+      <span class="author">${escapeHtml(c.author)}</span>
+      <span class="when">${fmtDate(c.created)}</span>
+      <div class="text">${escapeHtml(c.text)}</div>
+    </div>`).join('') + '</div>';
+}
+
+function renderLeads() {
+  const tbody = document.getElementById('leads-body');
+  const leads = state.data.leads.filter(l => passesFilters(l, true));
+  if (!leads.length) {
+    tbody.innerHTML = '<tr><td colspan="6" class="empty">Лидов по фильтру нет</td></tr>';
+    return;
+  }
+  tbody.innerHTML = leads.map(l => `
+    <tr>
+      <td>${fmtDate(l.created)}</td>
+      <td>
+        <div><b>${escapeHtml(l.name || l.title || ('Лид #' + l.id))}</b></div>
+        <div style="color:#6b7280;font-size:12px">#${l.id}${l.opportunity ? ' · ' + fmtMoney(l.opportunity) : ''}</div>
+      </td>
+      <td><span class="status ${semanticClass(l.status_semantic)}">${escapeHtml(l.status_name)}</span></td>
+      <td>${escapeHtml(l.manager || '—')}</td>
+      <td>${renderUtmChips(l)}</td>
+      <td>
+        ${l.source_description ? `<div class="description">${escapeHtml(l.source_description)}</div>` : ''}
+        ${renderComments(l, 'lead')}
+      </td>
+    </tr>
+  `).join('');
+}
+
+function renderDeals() {
+  const tbody = document.getElementById('deals-body');
+  const deals = state.data.deals.filter(d => passesFilters(d, false));
+  if (!deals.length) {
+    tbody.innerHTML = '<tr><td colspan="7" class="empty">Сделок по фильтру нет</td></tr>';
+    return;
+  }
+  tbody.innerHTML = deals.map(d => `
+    <tr>
+      <td>${fmtDate(d.created)}</td>
+      <td>
+        <div><b>${escapeHtml(d.title || ('Сделка #' + d.id))}</b></div>
+        <div style="color:#6b7280;font-size:12px">#${d.id}</div>
+      </td>
+      <td><span class="status ${semanticClass(d.stage_semantic)}">${escapeHtml(d.stage_name)}</span></td>
+      <td>${fmtMoney(d.opportunity)}</td>
+      <td>${escapeHtml(d.manager || '—')}</td>
+      <td>${renderUtmChips(d)}</td>
+      <td>
+        ${d.source_description ? `<div class="description">${escapeHtml(d.source_description)}</div>` : ''}
+        ${renderComments(d, 'deal')}
+      </td>
+    </tr>
+  `).join('');
+}
+
+function render() {
+  if (!state.data) return;
+  document.getElementById('last-refresh').textContent =
+    'Обновлено: ' + (state.data.last_refresh ? fmtDate(state.data.last_refresh) : '—') +
+    ' · период: ' + state.data.lookback_days + ' дней' +
+    (state.data.last_error ? ' · ошибка: ' + state.data.last_error : '');
+  renderStats();
+  renderLeads();
+  renderDeals();
+}
+
+async function toggleComments(kind, id) {
+  const block = document.getElementById(`comments-${kind}-${id}`);
+  if (!block) return;
+  if (block.style.display === 'block') {
+    block.style.display = 'none';
+    return;
+  }
+  block.style.display = 'block';
+  block.innerHTML = '<div class="empty" style="padding:8px">Загружаю…</div>';
+  try {
+    const res = await fetch(`/api/vk-comments/${kind}/${id}`, { cache: 'no-store' });
+    const data = await res.json();
+    block.innerHTML = renderCommentsList(data.comments || []);
+  } catch (e) {
+    block.innerHTML = '<div class="empty">Ошибка: ' + escapeHtml(e.message) + '</div>';
+  }
+}
+
+// Wire events
+document.querySelectorAll('.tab').forEach(t => {
+  t.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
+    t.classList.add('active');
+    state.tab = t.dataset.tab;
+    document.getElementById('tab-leads').style.display = state.tab === 'leads' ? '' : 'none';
+    document.getElementById('tab-deals').style.display = state.tab === 'deals' ? '' : 'none';
+  });
+});
+
+['filter-search', 'filter-status', 'filter-utm-campaign', 'filter-manager', 'filter-period'].forEach(id => {
+  document.getElementById(id).addEventListener('input', render);
+  document.getElementById(id).addEventListener('change', render);
+});
+
+document.addEventListener('click', e => {
+  const btn = e.target.closest('.toggle-comments');
+  if (btn) toggleComments(btn.dataset.kind, btn.dataset.id);
+});
+
+document.getElementById('refresh-btn').addEventListener('click', async () => {
+  document.getElementById('last-refresh').textContent = 'Обновляю…';
+  await fetch('/api/vk-refresh', { method: 'POST' });
+  await fetchData();
+});
+
+fetchData();
+setInterval(fetchData, REFRESH_MS);
+</script>
+</body>
+</html>
