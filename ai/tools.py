@@ -402,5 +402,84 @@ def get_tools_definitions():
                 },
                 "required": []
             }
+        },
+        {
+            "name": "avito_balance",
+            "description": (
+                "Текущий баланс Avito-аккаунта (рубли + бонусы). "
+                "Используй для вопросов 'сколько на счету Avito', 'хватит ли денег'."
+            ),
+            "input_schema": {"type": "object", "properties": {}, "required": []}
+        },
+        {
+            "name": "avito_items",
+            "description": (
+                "Список активных объявлений на Avito (id, title, цена, адрес, категория, URL). "
+                "Используй для 'какие у нас объявления', 'сколько активных', 'покажи объявления'."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "limit": {
+                        "type": "integer",
+                        "description": "Сколько объявлений вернуть (по умолчанию 50, максимум 100)."
+                    }
+                },
+                "required": []
+            }
+        },
+        {
+            "name": "avito_stats",
+            "description": (
+                "Статистика по объявлениям на Avito за период: просмотры (views/uniqViews), "
+                "контакты (uniqContacts), добавления в избранное. ИСПОЛЬЗУЙ для анализа эффективности "
+                "объявлений, конверсии 'просмотр → контакт'."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "date_from": {
+                        "type": "string",
+                        "description": "Начало периода YYYY-MM-DD (например 2026-05-11)."
+                    },
+                    "date_to": {
+                        "type": "string",
+                        "description": "Конец периода YYYY-MM-DD (например 2026-05-17)."
+                    }
+                },
+                "required": ["date_from", "date_to"]
+            }
+        },
+        {
+            "name": "avito_spend",
+            "description": (
+                "Расходы и пополнения на Avito за период: разбивка по типам услуг "
+                "(CPA, тарифы, продвижение), общий списанный объём, сторно, депозиты. "
+                "ИСПОЛЬЗУЙ для 'сколько мы потратили на Avito', 'на что тратим бюджет', 'ROI Avito'."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "date_from": {"type": "string", "description": "YYYY-MM-DD"},
+                    "date_to": {"type": "string", "description": "YYYY-MM-DD"}
+                },
+                "required": ["date_from", "date_to"]
+            }
+        },
+        {
+            "name": "avito_calls",
+            "description": (
+                "Звонки на объявления Avito (calltracking) за период: кто звонил, когда, "
+                "по какому объявлению. ИСПОЛЬЗУЙ для 'сколько звонков с Avito', 'звонки за вчера'."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "date_from": {"type": "string", "description": "YYYY-MM-DD"},
+                    "date_to": {"type": "string", "description": "YYYY-MM-DD"},
+                    "limit": {"type": "integer", "description": "Максимум звонков (по умолчанию 50, макс 100)"}
+                },
+                "required": ["date_from", "date_to"]
+            }
         }
     ]
