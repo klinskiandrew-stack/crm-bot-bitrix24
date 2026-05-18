@@ -84,6 +84,64 @@ async def _maybe_alert_admin_once(bot, spent: float):
         logger.warning("Failed to send daily limit alert to admin", error=str(e))
 
 
+# ---------- Answer sanitizer ----------
+
+# Codes that should never appear in user-facing text (incl. inside parens).
+# Prompt asks the model not to do this, but on long dialogs it still leaks.
+_FORBIDDEN_CODES = (
+    "CONVERTED", "JUNK", "IN_PROCESS", "NEW", "PREPARATION",
+    "WON", "LOSE", "STAGE_ID", "STATUS_ID",
+)
+
+# DSML markup that DeepSeek leaks when it wants to call a tool but can't.
+# These multi-line garbage fragments trail at the end of an otherwise good
+# answer. Match the whole tail starting from the marker.
+_DSML_RE = re.compile(
+    r"\n*<[\|｜│]+\s*DSML.*$",
+    flags=re.DOTALL | re.IGNORECASE,
+)
+# Also catch bare invoke fragments without preceding DSML marker:
+_INVOKE_RE = re.compile(
+    r"\n*<\s*[\|｜│]*\s*invoke\s+name=.*$",
+    flags=re.DOTALL | re.IGNORECASE,
+)
+_TOOL_CALL_TAG_RE = re.compile(
+    r"\n*<\s*[\|｜│]*\s*tool_calls?.*$",
+    flags=re.DOTALL | re.IGNORECASE,
+)
+
+# Tech codes in parens: "Квал Лиды (CONVERTED)" -> "Квал Лиды"
+_CODE_PAREN_RE = re.compile(
+    r"\s*\(\s*(" + "|".join(_FORBIDDEN_CODES) + r"|UC_[A-Z0-9_]+|C\d+:[A-Z0-9_:]+)\s*\)",
+    flags=re.IGNORECASE,
+)
+# Tech codes inline with optional dash: "20437 (UC_Q1ZP1L - Недозвон)"
+_CODE_INLINE_RE = re.compile(
+    r"\s*\(\s*(UC_[A-Z0-9_]+|C\d+:[A-Z0-9_:]+)\s*-\s*",
+    flags=re.IGNORECASE,
+)
+
+
+def _sanitize_answer(text: str) -> str:
+    """Hard-strip technical leakage from the model's final answer.
+
+    The system prompt tries to forbid these but they still slip through
+    on long, multi-tool dialogs. Doing it on the bot side guarantees the
+    user never sees raw codes or DSML tool-call fragments.
+    """
+    if not text:
+        return text
+    # 1. DSML / invoke / tool_calls trailing fragments
+    text = _DSML_RE.sub("", text)
+    text = _INVOKE_RE.sub("", text)
+    text = _TOOL_CALL_TAG_RE.sub("", text)
+    # 2. Codes in parens after a Russian name
+    text = _CODE_PAREN_RE.sub("", text)
+    # 3. Inline "(UC_X - Название)" -> "(Название"
+    text = _CODE_INLINE_RE.sub(" (", text)
+    return text.strip()
+
+
 # ---------- HTML formatting ----------
 
 _MD_LINK_RE = re.compile(r"\[([^\]]+)\]\((https?://[^)\s]+)\)")
@@ -285,7 +343,7 @@ async def process_question(
             progress_callback=_progress,
         )
 
-        answer = response.get("answer", "Ошибка: нет ответа")
+        answer = _sanitize_answer(response.get("answer", "Ошибка: нет ответа"))
         model = response.get("model", "claude-sonnet-4-6")
         tools_called = response.get("tools_called", [])
         duration_ms = response.get("duration_ms", 0)
