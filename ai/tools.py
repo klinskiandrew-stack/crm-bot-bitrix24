@@ -414,15 +414,16 @@ def get_tools_definitions():
         {
             "name": "avito_items",
             "description": (
-                "Список активных объявлений на Avito (id, title, цена, адрес, категория, URL). "
-                "Используй для 'какие у нас объявления', 'сколько активных', 'покажи объявления'."
+                "Список активных объявлений на Avito с пагинацией (загружает все страницы). "
+                "Возвращает id, title, цена, адрес, категория, URL. "
+                "У Growzone ~195 активных объявлений."
             ),
             "input_schema": {
                 "type": "object",
                 "properties": {
-                    "limit": {
+                    "max_items": {
                         "type": "integer",
-                        "description": "Сколько объявлений вернуть (по умолчанию 50, максимум 100)."
+                        "description": "Hard limit на количество (по умолчанию 500). Для аккаунта Growzone достаточно 200."
                     }
                 },
                 "required": []
@@ -431,21 +432,21 @@ def get_tools_definitions():
         {
             "name": "avito_stats",
             "description": (
-                "Статистика по объявлениям на Avito за период: просмотры (views/uniqViews), "
-                "контакты (uniqContacts), добавления в избранное. ИСПОЛЬЗУЙ для анализа эффективности "
-                "объявлений, конверсии 'просмотр → контакт'."
+                "Главный tool для статистики Avito. Считает по ВСЕМ активным объявлениям (пагинация + батчинг). "
+                "Возвращает: total_views, total_uniq_views, total_contacts, total_favorites за период.\n\n"
+                "ВАЖНО про метрики:\n"
+                "• uniqContacts = ОБРАЩЕНИЯ от клиентов (клики 'Позвонить' + 'Написать'). "
+                "Это то, что в кабинете Avito показано как 'Контакты'. Когда пользователь спрашивает "
+                "про звонки / контакты / обращения с Avito — используй это число.\n"
+                "• uniqFavorites = добавления в избранное.\n"
+                "• uniqViews = уникальные просмотры объявлений.\n"
+                "• Реальные звонки с записью (calltracking) у Growzone отключены — это платная услуга."
             ),
             "input_schema": {
                 "type": "object",
                 "properties": {
-                    "date_from": {
-                        "type": "string",
-                        "description": "Начало периода YYYY-MM-DD (например 2026-05-11)."
-                    },
-                    "date_to": {
-                        "type": "string",
-                        "description": "Конец периода YYYY-MM-DD (например 2026-05-17)."
-                    }
+                    "date_from": {"type": "string", "description": "YYYY-MM-DD"},
+                    "date_to": {"type": "string", "description": "YYYY-MM-DD"}
                 },
                 "required": ["date_from", "date_to"]
             }
@@ -469,8 +470,9 @@ def get_tools_definitions():
         {
             "name": "avito_calls",
             "description": (
-                "Звонки на объявления Avito (calltracking) за период: кто звонил, когда, "
-                "по какому объявлению. ИСПОЛЬЗУЙ для 'сколько звонков с Avito', 'звонки за вчера'."
+                "Записи реальных звонков из коллтрекинга Avito. "
+                "У Growzone коллтрекинг ОТКЛЮЧЁН (платная услуга Avito Pro), endpoint вернёт пустой результат. "
+                "Не используй этот tool для метрики обращений — используй avito_stats (uniqContacts)."
             ),
             "input_schema": {
                 "type": "object",

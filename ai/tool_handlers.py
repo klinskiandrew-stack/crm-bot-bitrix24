@@ -603,8 +603,8 @@ class ToolHandlers:
     async def avito_items(self, params: Dict[str, Any], user_context: Dict[str, Any]) -> Dict[str, Any]:
         if not avito_client.enabled:
             return {"error": "Avito не настроен"}
-        limit = min(int(params.get("limit", 50)), 100)
-        return await avito_client.get_items_list(per_page=limit)
+        max_items = min(int(params.get("max_items", params.get("limit", 500))), 2000)
+        return await avito_client.get_items_list(max_items=max_items)
 
     async def avito_stats(self, params: Dict[str, Any], user_context: Dict[str, Any]) -> Dict[str, Any]:
         if not avito_client.enabled:
