@@ -216,7 +216,7 @@ search_contacts_or_companies, get_pipeline_summary, get_user_activity_summary,
 get_recent_activities, count_deals_passed_stage, get_card_comments,
 metrika_traffic_summary, metrika_traffic_by_source,
 lus_financials, lus_get_deal, lus_search,
-avito_balance, avito_items, avito_stats, avito_spend, avito_calls, avito_funnel.
+avito_balance, avito_items, avito_stats, avito_spend, avito_calls, avito_funnel, avito_weak_ads.
 
 ================================================================
 ПРАВИЛА ОПРЕДЕЛЕНИЯ ИСТОЧНИКА КАНАЛА:
@@ -284,6 +284,11 @@ SOURCE_DESCRIPTION в карточке лида/сделки. UTM-метки —
   Считает CPL_real, CAC, ROI, конверсии contact→lead, lead→deal.
   ИСПОЛЬЗУЙ ВСЕГДА при вопросах «окупается ли Avito», «сколько лидов с Avito»,
   «ROI», «эффективность канала».
+- avito_weak_ads — ⭐ Аудит конкретных объявлений. Возвращает 3 группы:
+  high_views_no_contacts (главная боль — фото/цена/УТП слабые), stars
+  (масштабировать), no_views_in_period (информативно, НЕ ругай).
+  ИСПОЛЬЗУЙ при вопросах «что улучшить», «какие объявления плохие»,
+  «что чинить», «какие масштабировать», «дай конкретные id».
 
 ВАЖНОЕ ПОНИМАНИЕ МЕТРИК AVITO:
 - «Контакты» (uniqContacts) — это НЕ реальные звонки, а нажатия кнопки

@@ -471,6 +471,132 @@ class AvitoClient:
         self._cache_set(cache_key, result)
         return result
 
+    async def find_weak_and_star_ads(
+        self,
+        date_from: str,
+        date_to: str,
+        min_views_for_dead_zone: int = 20,
+        star_conversion_pct: float = 10.0,
+        star_min_contacts: int = 3,
+        sample_size: int = 10,
+    ) -> Dict[str, Any]:
+        """Классифицировать активные объявления на 3 группы и вернуть примеры.
+
+        Группы:
+          1. no_views_in_period — 0 views за период. НЕ называй их «мёртвыми»
+             (алгоритм Avito ротирует выдачу). Кандидаты на продвижение, либо
+             объявления в нишевых категориях.
+          2. high_views_no_contacts — ≥`min_views_for_dead_zone` просмотров и
+             0 обращений. РЕАЛЬНАЯ проблема — фото/цена/заголовок не убеждают.
+          3. stars — высокая конверсия (>star_conversion_pct%) или
+             ≥star_min_contacts обращений. Кандидаты на масштабирование.
+
+        Returns dict со сводными счётчиками + sample_size примеров каждой группы.
+        """
+        if not self.enabled:
+            return {"error": "Avito not configured"}
+
+        user_id = settings.avito_user_id
+        if not user_id:
+            return {"error": "AVITO_USER_ID not set"}
+
+        cache_key = f"weak:{date_from}:{date_to}:{min_views_for_dead_zone}:{star_conversion_pct}:{star_min_contacts}:{sample_size}"
+        cached = self._cache_get(cache_key)
+        if cached:
+            return cached
+
+        items_data = await self.get_items_list(max_items=2000, status="active")
+        if "error" in items_data:
+            return items_data
+        all_items = items_data.get("items", [])
+        item_ids = [it["id"] for it in all_items]
+        if not item_ids:
+            return {"error": "Нет активных объявлений"}
+
+        stats = await self._fetch_stats_aggregate(date_from, date_to, item_ids)
+        if "error" in stats:
+            return stats
+
+        # Build per-item stats lookup. _fetch_stats_aggregate only returns
+        # top_items с активностью — нам нужен полный mapping, поэтому делаем
+        # отдельный проход по результату через _request, но через тот же helper:
+        # переиспользуем top_items map + considerем missing = (0,0,0,0).
+        stats_lookup: Dict[int, Dict[str, int]] = {
+            it["item_id"]: it for it in stats.get("top_items", [])
+        }
+
+        no_views: List[Dict[str, Any]] = []
+        high_views_no_contacts: List[Dict[str, Any]] = []
+        stars: List[Dict[str, Any]] = []
+
+        for item in all_items:
+            iid = item["id"]
+            s = stats_lookup.get(iid)
+            views = s.get("views", 0) if s else 0
+            contacts = s.get("contacts", 0) if s else 0
+            favorites = s.get("favorites", 0) if s else 0
+
+            row = {
+                "item_id": iid,
+                "title": item.get("title"),
+                "price": item.get("price"),
+                "address": item.get("address"),
+                "category": item.get("category"),
+                "url": item.get("url"),
+                "views": views,
+                "contacts": contacts,
+                "favorites": favorites,
+            }
+
+            if views == 0 and contacts == 0:
+                no_views.append(row)
+                continue
+
+            if views >= min_views_for_dead_zone and contacts == 0:
+                high_views_no_contacts.append(row)
+                # Не continue — может быть и stars? Нет, contacts=0, не star.
+
+            conversion = (contacts / views * 100) if views > 0 else 0
+            row["conversion_pct"] = round(conversion, 1)
+            if contacts >= star_min_contacts or conversion >= star_conversion_pct:
+                stars.append(row)
+
+        # Sorting: главное — что бот покажет первым
+        high_views_no_contacts.sort(key=lambda x: x["views"], reverse=True)
+        stars.sort(key=lambda x: (x["contacts"], x["conversion_pct"]), reverse=True)
+
+        result = {
+            "date_from": date_from,
+            "date_to": date_to,
+            "timezone": "Europe/Moscow (MSK, UTC+3)",
+            "active_items_count": len(all_items),
+            "summary": {
+                "no_views_in_period_count": len(no_views),
+                "high_views_no_contacts_count": len(high_views_no_contacts),
+                "stars_count": len(stars),
+                "active_with_some_activity_count": len(all_items) - len(no_views),
+            },
+            "thresholds": {
+                "min_views_for_dead_zone": min_views_for_dead_zone,
+                "star_conversion_pct": star_conversion_pct,
+                "star_min_contacts": star_min_contacts,
+            },
+            # Sample only — sample_size штук, чтобы не раздувать ответ
+            "no_views_sample": no_views[:sample_size],
+            "high_views_no_contacts": high_views_no_contacts[:sample_size],
+            "stars": stars[:sample_size],
+            "note": (
+                "no_views_in_period — это НЕ «мёртвые» объявления. Avito ротирует "
+                "выдачу: при складе 100+ объявлений в широкой географии 30-60% "
+                "за неделю получают 0 показов — это нормально. "
+                "ГЛАВНАЯ боль — high_views_no_contacts: люди видят объявление, "
+                "но не пишут/звонят. Это проблема ФОТО / ЦЕНЫ / ЗАГОЛОВКА / УТП. "
+                "stars — кандидаты на масштабирование (XL/Premium/CPA-промо)."
+            ),
+        }
+        self._cache_set(cache_key, result)
+        return result
+
     async def get_calls(
         self,
         date_from: str,
