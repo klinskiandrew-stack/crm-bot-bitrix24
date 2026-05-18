@@ -86,6 +86,8 @@ class ToolHandlers:
                 return await self.avito_spend(tool_input, user_context)
             elif tool_name == "avito_calls":
                 return await self.avito_calls(tool_input, user_context)
+            elif tool_name == "avito_funnel":
+                return await self.avito_funnel(tool_input, user_context)
             else:
                 return {"error": f"Unknown tool: {tool_name}"}
         except Exception as e:
@@ -639,6 +641,157 @@ class ToolHandlers:
             date_to=params.get("date_to"),
             limit=int(params.get("limit", 50)),
         )
+
+    async def avito_funnel(self, params: Dict[str, Any], user_context: Dict[str, Any]) -> Dict[str, Any]:
+        """Funnel: Avito spend → contacts → Bitrix leads → Bitrix deals → ROI.
+
+        Связывает Avito API и Bitrix24 через SOURCE_ID из sources_mapping.yaml.
+        Если у пользователя есть `b24_user_ids` (partner / scoped admin) — фильтрует
+        только его лиды/сделки. Для admin без ограничений берёт всё.
+        """
+        if not avito_client.enabled:
+            return {"error": "Avito не настроен"}
+
+        err = _validate_params(params, date_keys=("date_from", "date_to"), stage_key="not_used")
+        if err:
+            return err
+
+        date_from = params.get("date_from")
+        date_to = params.get("date_to")
+
+        # 1. Avito spend и contacts параллельно
+        spend_data = await avito_client.get_operations_history(date_from, date_to)
+        stats_data = await avito_client.get_items_stats(date_from, date_to)
+
+        net_spend = spend_data.get("net_spend", 0) if "error" not in spend_data else 0
+        total_deposit = spend_data.get("total_deposit", 0) if "error" not in spend_data else 0
+        avito_contacts = stats_data.get("total_contacts", 0) if "error" not in stats_data else 0
+        avito_views = stats_data.get("total_views", 0) if "error" not in stats_data else 0
+
+        # 2. Bitrix24 leads + deals с источником Avito
+        from ai.prompts import _load_sources_mapping
+        mapping = _load_sources_mapping()
+        avito_cfg = mapping.get("Авито") or mapping.get("Avito") or {}
+        avito_source_ids = avito_cfg.get("bitrix_source_ids", [])
+        phone_pool = avito_cfg.get("phone_pool", [])
+
+        if not avito_source_ids:
+            return {"error": "В config/sources_mapping.yaml не найден маппинг 'Авито'"}
+
+        b24 = await self._get_client()
+        assigned_ids = user_context.get("b24_user_ids") or []
+
+        leads = await b24.get_leads(
+            assigned_by_ids=assigned_ids,
+            filter_by_date_from=date_from,
+            filter_by_date_to=date_to,
+            filter_by_source_ids=avito_source_ids,
+            limit=500,
+        )
+        deals = await b24.get_deals(
+            assigned_by_ids=assigned_ids,
+            filter_by_date_from=date_from,
+            filter_by_date_to=date_to,
+            filter_by_source_ids=avito_source_ids,
+            limit=500,
+        )
+
+        # 3. Метрики
+        leads_count = len(leads)
+        deals_count = len(deals)
+
+        # Won сделки = STAGE_SEMANTIC_ID == 'S' (success)
+        won_deals = [d for d in deals if d.get("STAGE_SEMANTIC_ID") == "S"]
+        won_count = len(won_deals)
+        won_revenue = sum(float(d.get("OPPORTUNITY") or 0) for d in won_deals)
+
+        # Lost сделки
+        lost_deals = [d for d in deals if d.get("STAGE_SEMANTIC_ID") == "F"]
+        lost_count = len(lost_deals)
+
+        # In-progress
+        in_progress = deals_count - won_count - lost_count
+
+        # Conversions / unit-economics
+        def _safe_div(a, b):
+            return round(a / b, 2) if b else None
+
+        cpl_real = _safe_div(net_spend, leads_count)
+        cac = _safe_div(net_spend, won_count)
+        roi_x = _safe_div(won_revenue, net_spend)  # X-кратность
+        roi_pct = round((won_revenue - net_spend) / net_spend * 100, 1) if net_spend else None
+
+        conv_contact_to_lead = round(leads_count / avito_contacts * 100, 1) if avito_contacts else None
+        conv_lead_to_won = round(won_count / leads_count * 100, 1) if leads_count else None
+        conv_lead_to_deal = round(deals_count / leads_count * 100, 1) if leads_count else None
+
+        # Топ сделок по сумме
+        top_won = sorted(
+            ({
+                "id": d.get("ID"),
+                "title": d.get("TITLE"),
+                "amount": float(d.get("OPPORTUNITY") or 0),
+                "closed_at": d.get("CLOSEDATE") or d.get("DATE_CREATE"),
+                "assigned": d.get("ASSIGNED_BY_ID"),
+            } for d in won_deals),
+            key=lambda x: x["amount"],
+            reverse=True,
+        )[:10]
+
+        return {
+            "date_from": date_from,
+            "date_to": date_to,
+            "timezone": "Europe/Moscow (MSK)",
+            "scope": "your data only" if assigned_ids else "all (admin)",
+
+            "avito": {
+                "net_spend_rub": net_spend,
+                "total_deposit_rub": total_deposit,
+                "views": avito_views,
+                "contacts": avito_contacts,  # uniqContacts из API
+                "view_to_contact_pct": _safe_div(avito_contacts * 100, avito_views),
+            },
+
+            "bitrix24": {
+                "leads_count": leads_count,
+                "deals_count": deals_count,
+                "won_count": won_count,
+                "lost_count": lost_count,
+                "in_progress_count": in_progress,
+                "won_revenue_rub": round(won_revenue, 0),
+                "top_won_deals": top_won,
+                "source_ids_used": avito_source_ids,
+            },
+
+            "funnel": {
+                "avito_contacts": avito_contacts,
+                "leads_in_bitrix": leads_count,
+                "deals_in_bitrix": deals_count,
+                "won_deals": won_count,
+                "won_revenue_rub": round(won_revenue, 0),
+            },
+
+            "conversions_pct": {
+                "contact_to_lead": conv_contact_to_lead,
+                "lead_to_deal": conv_lead_to_deal,
+                "lead_to_won": conv_lead_to_won,
+            },
+
+            "unit_economics_rub": {
+                "cpl_real": cpl_real,       # стоимость одного лида в CRM
+                "cac": cac,                 # стоимость одной выигранной сделки
+                "roi_multiplier": roi_x,    # во сколько раз отбили
+                "roi_pct": roi_pct,         # ROI в процентах
+            },
+
+            "note": (
+                "CPL_real = расход_Avito / лиды_в_CRM (с SOURCE_ID Avito). "
+                "ROI = выручка_won_сделок / расход. "
+                "Сделки фильтруются по DATE_CREATE — могут включаться сделки лет назад "
+                "если их источник Avito. Для чистой воронки конкретно за период "
+                "лучше использовать avito_contacts vs leads_count."
+            ),
+        }
 
 
 # Global handlers instance
