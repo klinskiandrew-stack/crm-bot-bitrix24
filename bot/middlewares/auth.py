@@ -28,18 +28,35 @@ class AuthMiddleware(BaseMiddleware):
         else:
             return await handler(event, data)
 
+        # Determine chat type — affects whether we publicly answer 'denied'
+        # to unknown users. In groups we stay silent (don't litter the chat
+        # and don't reveal the bot has auth). In private chats we DO reply
+        # so the user understands they need to be added.
+        chat_type = None
+        if isinstance(event, types.Message) and event.chat:
+            chat_type = event.chat.type
+        elif isinstance(event, types.CallbackQuery) and event.message and event.message.chat:
+            chat_type = event.message.chat.type
+
+        is_private = chat_type == "private"
+
         # Check if user exists in database
         user = await users_repo.get_by_telegram_id(user_id)
 
         if not user:
-            logger.warning("Unknown user attempt", telegram_id=user_id)
-            if isinstance(event, types.Message):
+            logger.warning(
+                "Unknown user attempt",
+                telegram_id=user_id,
+                chat_type=chat_type,
+                replied=is_private,
+            )
+            if is_private and isinstance(event, types.Message):
                 await event.answer("Доступ запрещен. Вы не зарегистрированы в системе.")
             return
 
         if not user.get("is_active"):
-            logger.warning("Inactive user attempt", telegram_id=user_id)
-            if isinstance(event, types.Message):
+            logger.warning("Inactive user attempt", telegram_id=user_id, chat_type=chat_type)
+            if is_private and isinstance(event, types.Message):
                 await event.answer("Ваш аккаунт деактивирован.")
             return
 
