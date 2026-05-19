@@ -8,6 +8,7 @@ import structlog
 from b24.client import Bitrix24Client
 from metrika.client import metrika_client
 from sheets.lus_client import lus_client
+from sheets.pnl_client import pnl_client
 from avito.client import avito_client
 from config import settings
 
@@ -76,6 +77,12 @@ class ToolHandlers:
                 return await self.lus_search(tool_input, user_context)
             elif tool_name == "lus_financials":
                 return await self.lus_financials(tool_input, user_context)
+            elif tool_name == "pnl_summary":
+                return await self.pnl_summary(tool_input, user_context)
+            elif tool_name == "pnl_articles":
+                return await self.pnl_articles(tool_input, user_context)
+            elif tool_name == "pnl_month":
+                return await self.pnl_month(tool_input, user_context)
             elif tool_name == "avito_balance":
                 return await self.avito_balance(tool_input, user_context)
             elif tool_name == "avito_items":
@@ -598,6 +605,39 @@ class ToolHandlers:
             group_by=actual_group,
             only_completed=only_completed,
         )
+
+    # ---------- ОПиУ P&L Google Sheet tools ----------
+
+    async def pnl_summary(self, params: Dict[str, Any], user_context: Dict[str, Any]) -> Dict[str, Any]:
+        """KPI-сводка из помесячных листов ОПиУ за последние N месяцев."""
+        if not pnl_client.enabled:
+            return {"error": "Google Sheet ОПиУ не настроен (нет ключа service account)"}
+        months = int(params.get("months", 6) or 6)
+        return await pnl_client.summary(months=months)
+
+    async def pnl_articles(self, params: Dict[str, Any], user_context: Dict[str, Any]) -> Dict[str, Any]:
+        """Помесячная детализация по статьям ОПиУ за период."""
+        if not pnl_client.enabled:
+            return {"error": "Google Sheet ОПиУ не настроен"}
+        date_from = params.get("date_from")
+        date_to = params.get("date_to")
+        articles = params.get("articles")
+        if articles is not None and not isinstance(articles, list):
+            return {"error": "articles должен быть массивом строк"}
+        return await pnl_client.articles(
+            date_from=date_from,
+            date_to=date_to,
+            articles=articles,
+        )
+
+    async def pnl_month(self, params: Dict[str, Any], user_context: Dict[str, Any]) -> Dict[str, Any]:
+        """Полный ОПиУ за один месяц с разбивкой Москва/Казань/Итого."""
+        if not pnl_client.enabled:
+            return {"error": "Google Sheet ОПиУ не настроен"}
+        ym = params.get("year_month")
+        if not ym:
+            return {"error": "year_month обязателен (формат YYYY-MM)"}
+        return await pnl_client.month_detail(ym)
 
     async def avito_balance(self, params: Dict[str, Any], user_context: Dict[str, Any]) -> Dict[str, Any]:
         if not avito_client.enabled:
