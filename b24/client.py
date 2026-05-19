@@ -145,12 +145,21 @@ class Bitrix24Client:
         filter_by_source_ids: Optional[List[str]] = None,
         filter_by_title_contains: Optional[str] = None,
         filter_by_utm_source: Optional[str] = None,
+        filter_by_direction_ids: Optional[List[int]] = None,
         limit: int = 50,
     ) -> List[Dict[str, Any]]:
         """Get deals for assigned users.
 
         Includes UTM fields by default so reports like 'deals by traffic
         source' don't need to fan out to get_deal_full per row.
+
+        UF fields in select:
+        - UF_CRM_651D2BA47419A = Направление (enumeration, see DEAL_DIRECTIONS
+          in tool_handlers): 89=Автополив МСК, 91=Фасадная подсветка,
+          187=Рулонный газон, 137=Автополив другие города, 155=Ландшафтный
+          дизайн, 597=Ландшафтное освещение.
+        - UF_CRM_67C71B6E2224F = Причина отказа сделки (enumeration, 19
+          values — see DEAL_JUNK_REASONS).
         """
         params = {
             "filter": {},
@@ -161,6 +170,7 @@ class Bitrix24Client:
                 "ASSIGNED_BY_ID", "CONTACT_ID", "COMPANY_ID",
                 "TYPE_ID", "CATEGORY_ID", "SOURCE_ID", "SOURCE_DESCRIPTION",
                 "UTM_SOURCE", "UTM_MEDIUM", "UTM_CAMPAIGN", "UTM_CONTENT", "UTM_TERM",
+                "UF_CRM_651D2BA47419A", "UF_CRM_67C71B6E2224F",
             ]
         }
 
@@ -178,6 +188,9 @@ class Bitrix24Client:
             params["filter"]["%TITLE"] = filter_by_title_contains
         if filter_by_utm_source:
             params["filter"]["UTM_SOURCE"] = filter_by_utm_source
+        if filter_by_direction_ids:
+            # Bitrix accepts arrays for UF enum filter — matches any of given IDs.
+            params["filter"]["UF_CRM_651D2BA47419A"] = filter_by_direction_ids
 
         return await self._paginate("crm.deal.list", params, limit=limit, max_items=limit)
 
@@ -198,6 +211,7 @@ class Bitrix24Client:
         filter_by_source_ids: Optional[List[str]] = None,
         filter_by_title_contains: Optional[str] = None,
         filter_by_utm_source: Optional[str] = None,
+        filter_by_direction_ids: Optional[List[int]] = None,
         limit: int = 50,
     ) -> List[Dict[str, Any]]:
         """Get leads for assigned users.
@@ -206,10 +220,14 @@ class Bitrix24Client:
         DATE_MODIFY/LAST_NAME/COMPANY_TITLE/CURRENCY_ID/UTM_CONTENT/UTM_TERM
         to shrink payload ~35%. For full data use get_lead_full per ID.
 
-        UF_CRM_1723465843 = freeform "причина отказа" (refusal reason),
-        filled by managers on JUNK leads. Kept in lean select so analysis
-        of refusal causes works in a single get_leads call without fanning
-        out to get_card_comments per lead.
+        UF fields kept in lean select:
+        - UF_CRM_1723465843 = freeform "причина отказа" (refusal reason),
+          filled by managers on JUNK leads. Lets analyze_junk_leads / a single
+          get_leads call group refusals without fanning out to get_card_comments.
+        - UF_CRM_1696239286 = Направление (enumeration, see LEAD_DIRECTIONS
+          in tool_handlers): 85=Автополив МСК, 87=Фасадная подсветка,
+          183=Рулонный газон, 133=Автополив другие города, 151=Ландшафтный
+          дизайн, 599=Ландшафтное освещение.
         """
         params = {
             "filter": {},
@@ -219,7 +237,7 @@ class Bitrix24Client:
                 "DATE_CREATE", "ASSIGNED_BY_ID", "NAME",
                 "SOURCE_ID", "SOURCE_DESCRIPTION", "WEBFORM_ID",
                 "UTM_SOURCE", "UTM_MEDIUM", "UTM_CAMPAIGN",
-                "UF_CRM_1723465843",
+                "UF_CRM_1723465843", "UF_CRM_1696239286",
             ]
         }
 
@@ -238,6 +256,8 @@ class Bitrix24Client:
             params["filter"]["%TITLE"] = filter_by_title_contains
         if filter_by_utm_source:
             params["filter"]["UTM_SOURCE"] = filter_by_utm_source
+        if filter_by_direction_ids:
+            params["filter"]["UF_CRM_1696239286"] = filter_by_direction_ids
 
         return await self._paginate("crm.lead.list", params, limit=limit, max_items=limit)
 

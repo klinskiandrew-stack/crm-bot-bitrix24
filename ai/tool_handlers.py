@@ -17,6 +17,79 @@ logger = structlog.get_logger()
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
+# ============================================================
+# Bitrix24 UF enumeration dictionaries
+# ============================================================
+# Lead "Направление" (UF_CRM_1696239286) → human-readable name.
+# Source: crm.lead.userfield.list ID=729.
+LEAD_DIRECTIONS: Dict[int, str] = {
+    85: "Автополив Москва и МО",
+    87: "Фасадная подсветка",
+    133: "Автополив другие города",
+    151: "Ландшафтный дизайн",
+    183: "Рулонный газон",
+    599: "Ландшафтное освещение",
+}
+
+# Deal "Направление" (UF_CRM_651D2BA47419A) → human-readable name.
+# Different IDs than leads — Bitrix assigns IDs per-field, not per-value.
+# Source: crm.deal.userfield.list ID=731.
+DEAL_DIRECTIONS: Dict[int, str] = {
+    89: "Автополив Москва и МО",
+    91: "Фасадная подсветка",
+    137: "Автополив другие города",
+    155: "Ландшафтный дизайн",
+    187: "Рулонный газон",
+    597: "Ландшафтное освещение",
+}
+
+# Deal "Причина отказа" (UF_CRM_67C71B6E2224F) → structured enum.
+# Unlike leads (which use freeform UF_CRM_1723465843), deals refer to a
+# curated list — perfect for clean grouping in analyze_junk_deals.
+# Source: crm.deal.userfield.list ID=1159.
+DEAL_JUNK_REASONS: Dict[int, str] = {
+    279: "Недозвон",
+    281: "СПАМ",
+    283: "По поводу работы",
+    285: "Маленький объём (менее 2 соток)",
+    287: "Ошибся номером",
+    289: "Дорого (газон, растения)",
+    451: "Выбрали других",
+    515: "Не актуально (продал/переехал, передумал)",
+    551: "Дубль",
+    553: "Тест",
+    561: "Негатив от клиента",
+    585: "Нет партнёра в этом регионе",
+    593: "Ремонт системы Автополива",
+    607: "Сделали сами",
+    623: "Монтаж на свой материал",
+    767: "Дорого (теплица, грядки)",
+    775: "Тендер",
+    783: "Предложение товаров/услуг",
+    795: "Купить оборудование (малый объём)",
+}
+
+
+def _safe_int(val: Any) -> int:
+    """Bitrix returns enum IDs as strings ('85') and sometimes ints (85)."""
+    try:
+        return int(val)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _resolve_direction(raw: Any, mapping: Dict[int, str]) -> str:
+    """ID → Russian name, '' if unknown or empty. Falls back to '#<id>' for
+    unknown enum values so the LLM still sees something searchable instead
+    of silently dropping the row."""
+    if raw in (None, "", 0, "0"):
+        return ""
+    key = _safe_int(raw)
+    if not key:
+        return ""
+    return mapping.get(key, f"#{key}")
+
+
 def _validate_params(params: Dict[str, Any], date_keys=("filter_by_date_from", "filter_by_date_to", "date_from", "date_to"), stage_key="filter_by_stage"):
     """Validate common Bitrix24 param formats. Returns None if OK, error dict if invalid."""
     for k in date_keys:
@@ -69,6 +142,8 @@ class ToolHandlers:
                 return await self.get_card_comments(tool_input, user_context)
             elif tool_name == "analyze_junk_leads":
                 return await self.analyze_junk_leads(tool_input, user_context)
+            elif tool_name == "analyze_junk_deals":
+                return await self.analyze_junk_deals(tool_input, user_context)
             elif tool_name == "metrika_traffic_summary":
                 return await self.metrika_traffic_summary(tool_input, user_context)
             elif tool_name == "metrika_traffic_by_source":
@@ -192,6 +267,7 @@ class ToolHandlers:
             filter_by_source_ids=params.get("filter_by_source_ids"),
             filter_by_title_contains=params.get("filter_by_title_contains"),
             filter_by_utm_source=params.get("filter_by_utm_source"),
+            filter_by_direction_ids=params.get("filter_by_direction_ids"),
             limit=min(params.get("limit", 20), 100)
         )
 
@@ -203,6 +279,14 @@ class ToolHandlers:
             for d in deals[:50]:
                 d = dict(d)
                 d["card_url"] = client.deal_url(d.get("ID"))
+                # Resolve UF enum IDs to human-readable names so the LLM
+                # doesn't have to know magic numbers. Raw ID is kept too
+                # for filter round-trips.
+                d["direction"] = _resolve_direction(
+                    d.get("UF_CRM_651D2BA47419A"), DEAL_DIRECTIONS,
+                )
+                junk_reason_id = _safe_int(d.get("UF_CRM_67C71B6E2224F"))
+                d["junk_reason"] = DEAL_JUNK_REASONS.get(junk_reason_id, "") if junk_reason_id else ""
                 enriched.append(d)
 
         return {
@@ -249,6 +333,7 @@ class ToolHandlers:
             filter_by_source_ids=params.get("filter_by_source_ids"),
             filter_by_title_contains=params.get("filter_by_title_contains"),
             filter_by_utm_source=params.get("filter_by_utm_source"),
+            filter_by_direction_ids=params.get("filter_by_direction_ids"),
             limit=min(params.get("limit", 20), 100)
         )
 
@@ -260,6 +345,9 @@ class ToolHandlers:
             for l in leads[:50]:
                 l = dict(l)
                 l["card_url"] = client.lead_url(l.get("ID"))
+                l["direction"] = _resolve_direction(
+                    l.get("UF_CRM_1696239286"), LEAD_DIRECTIONS,
+                )
                 enriched.append(l)
 
         return {
@@ -530,6 +618,7 @@ class ToolHandlers:
             filter_by_date_to=date_to,
             filter_by_source_ids=params.get("source_ids"),
             filter_by_title_contains=params.get("title_contains"),
+            filter_by_direction_ids=params.get("direction_ids"),
             limit=limit,
         )
 
@@ -581,6 +670,7 @@ class ToolHandlers:
                 "id": lead_id,
                 "title": (lead.get("TITLE") or "")[:80],
                 "source": lead.get("SOURCE_ID"),
+                "direction": _resolve_direction(lead.get("UF_CRM_1696239286"), LEAD_DIRECTIONS),
                 "reason": raw_reason[:200],
                 "card_url": client.lead_url(lead_id) if lead_id else None,
             })
@@ -593,6 +683,7 @@ class ToolHandlers:
             "filters": {
                 "source_ids": params.get("source_ids"),
                 "title_contains": params.get("title_contains"),
+                "direction_ids": params.get("direction_ids"),
             },
             "summary": {
                 "total_junk": total,
@@ -607,6 +698,111 @@ class ToolHandlers:
                 "top_reasons сгруппированы по нормализованной первой строке причины. "
                 "Близкие по смыслу формулировки могут попасть в разные группы — "
                 "объедини их в финальном ответе."
+            ),
+        }
+
+    async def analyze_junk_deals(self, params: Dict[str, Any], user_context: Dict[str, Any]) -> Dict[str, Any]:
+        """Aggregate dropped deals over a period and group by curated reason.
+
+        Mirrors analyze_junk_leads but for deals — and gets to use the
+        structured enum UF_CRM_67C71B6E2224F instead of freeform notes,
+        so grouping is exact (no fuzzy first-line trick needed).
+
+        Filter by stage_semantic_id='F' (failed) by default, or pass
+        stage_ids=['C0:LOSE','C2:LOSE',...] for a specific subset.
+        """
+        err = _validate_params(params, date_keys=("date_from", "date_to"), stage_key="not_used")
+        if err:
+            return err
+
+        date_from = params.get("date_from")
+        date_to = params.get("date_to")
+        if not date_from or not date_to:
+            return {"error": "date_from и date_to обязательны (формат YYYY-MM-DD)"}
+
+        b24_user_ids = user_context.get("b24_user_ids", [])
+        if not b24_user_ids and not user_context.get("is_admin", False):
+            return {"summary": {}, "message": "No assigned users configured"}
+
+        limit = min(int(params.get("limit") or 100), 200)
+        top_n = max(1, int(params.get("top_n") or 8))
+
+        client = await self._get_client()
+        deals = await client.get_deals(
+            assigned_by_ids=b24_user_ids,
+            filter_by_date_from=date_from,
+            filter_by_date_to=date_to,
+            filter_by_source_ids=params.get("source_ids"),
+            filter_by_title_contains=params.get("title_contains"),
+            filter_by_direction_ids=params.get("direction_ids"),
+            limit=limit,
+        )
+
+        if isinstance(deals, dict) and "error" in deals:
+            return deals
+        if not isinstance(deals, list):
+            return {"error": "Bitrix вернул неожиданный формат"}
+
+        # Filter to dropped/failed deals locally (semantic 'F' = lose/junk
+        # in Bitrix). get_deals doesn't expose stage_semantic directly as a
+        # filter without naming a specific pipeline.
+        dropped = [d for d in deals if d.get("STAGE_SEMANTIC_ID") == "F"]
+        total = len(dropped)
+
+        with_reason: List[Dict[str, Any]] = []
+        without_reason_ids: List[int] = []
+        groups: Dict[int, Dict[str, Any]] = {}
+
+        for d in dropped:
+            deal_id = d.get("ID")
+            reason_id = _safe_int(d.get("UF_CRM_67C71B6E2224F"))
+            if not reason_id:
+                if deal_id:
+                    without_reason_ids.append(int(deal_id))
+                continue
+
+            reason_name = DEAL_JUNK_REASONS.get(reason_id, f"#{reason_id}")
+            entry = groups.setdefault(reason_id, {
+                "reason_id": reason_id,
+                "reason": reason_name,
+                "count": 0,
+                "deal_ids": [],
+            })
+            entry["count"] += 1
+            if deal_id and len(entry["deal_ids"]) < 10:
+                entry["deal_ids"].append(int(deal_id))
+
+            with_reason.append({
+                "id": deal_id,
+                "title": (d.get("TITLE") or "")[:80],
+                "source": d.get("SOURCE_ID"),
+                "direction": _resolve_direction(d.get("UF_CRM_651D2BA47419A"), DEAL_DIRECTIONS),
+                "reason": reason_name,
+                "opportunity": d.get("OPPORTUNITY"),
+                "card_url": client.deal_url(deal_id) if deal_id else None,
+            })
+
+        top_groups = sorted(groups.values(), key=lambda g: g["count"], reverse=True)[:top_n]
+
+        return {
+            "period": {"from": date_from, "to": date_to},
+            "filters": {
+                "source_ids": params.get("source_ids"),
+                "title_contains": params.get("title_contains"),
+                "direction_ids": params.get("direction_ids"),
+            },
+            "summary": {
+                "total_dropped_deals": total,
+                "with_reason": len(with_reason),
+                "without_reason": len(without_reason_ids),
+                "unique_reasons": len(groups),
+            },
+            "top_reasons": top_groups,
+            "examples": with_reason[:5],
+            "without_reason_deal_ids": without_reason_ids[:20],
+            "note": (
+                "Причины — структурированный enum из карточки сделки (19 значений), "
+                "поэтому группировка точная, без слияния похожих формулировок."
             ),
         }
 
