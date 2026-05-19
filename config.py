@@ -37,6 +37,21 @@ class Settings(BaseSettings):
     # Google Sheets (optional). Service account JSON path. SA must have read access to the sheet.
     google_sa_path: str = "/opt/crm-bot/secrets/google_sa.json"
 
+    # Zoom (Server-to-Server OAuth). marketplace.zoom.us → Build App → S2S OAuth.
+    # Required scopes: meeting:write:meeting, user:read:user.
+    zoom_account_id: str = ""
+    zoom_client_id: str = ""
+    zoom_client_secret: str = ""
+
+    # Meetings module. Toggle to disable entirely without removing code.
+    meetings_enabled: bool = True
+    meetings_timezone: str = "Europe/Moscow"
+    meetings_work_start_hour: int = 10
+    meetings_work_end_hour: int = 18
+    meetings_default_duration_min: int = 60
+    meetings_poll_timeout_min: int = 60
+    meetings_reminder_min_before: int = 30
+
     # Scheduled reports (sent to a Telegram chat at fixed cron times).
     # Override via .env. Empty REPORTS_CHAT_ID disables the scheduler.
     reports_enabled: bool = True

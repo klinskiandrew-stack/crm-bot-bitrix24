@@ -434,6 +434,78 @@ async def process_question(
         typing_task.cancel()
 
 
+async def _maybe_handle_meeting(message: types.Message, question: str, user_context: dict) -> bool:
+    """If the message is a meeting request, handle it and return True.
+    Otherwise return False so the normal CRM-bot pipeline runs."""
+    if not settings.meetings_enabled:
+        return False
+    try:
+        from meetings.intent import parse as parse_intent
+        from meetings.zoom_client import zoom_client
+        from meetings import flow as mflow
+
+        intent = await parse_intent(question)
+        if intent is None:
+            return False
+
+        if not zoom_client.configured():
+            await message.reply(
+                "⚠️ Zoom не настроен на сервере. "
+                "Попроси администратора заполнить ZOOM_ACCOUNT_ID/CLIENT_ID/CLIENT_SECRET."
+            )
+            return True
+
+        if intent.kind == "direct":
+            err = mflow.validate_intent(intent)
+            if err:
+                await message.reply(err)
+                return True
+            hh, mm = intent.meeting_time.split(":")
+            participants = []
+            # Author auto-included; no picker for direct meetings.
+            uname = message.from_user.full_name or message.from_user.username or f"id{message.from_user.id}"
+            participants.append({"user_id": message.from_user.id, "full_name": uname})
+
+            db_id, res = await mflow.schedule_meeting(
+                chat_id=message.chat.id,
+                initiator_id=message.from_user.id,
+                meeting_date=intent.meeting_date,
+                hour=int(hh),
+                minute=int(mm),
+                duration_min=intent.duration_min,
+                topic=intent.topic,
+                participants=participants,
+            )
+            await message.reply(
+                res.text,
+                parse_mode=ParseMode.HTML,
+                disable_web_page_preview=True,
+            )
+            return True
+
+        if intent.kind == "vote":
+            poll_id, res = await mflow.start_voting_poll(
+                bot=message.bot,
+                chat_id=message.chat.id,
+                initiator_id=message.from_user.id,
+                intent=intent,
+            )
+            sent = await message.reply(
+                res.text,
+                reply_markup=res.keyboard,
+                parse_mode=ParseMode.HTML,
+                disable_web_page_preview=True,
+            )
+            if poll_id and sent:
+                from db.repositories import meeting_polls as polls_repo
+                await polls_repo.update(poll_id, message_id=sent.message_id)
+            return True
+    except Exception as e:
+        logger.error("Meeting handler failed, falling back to orchestrator", error=str(e))
+        return False
+    return False
+
+
 @router.message(F.text, F.chat.type.in_({"group", "supergroup"}))
 async def handle_mention(message: types.Message, user_context: dict = None):
     """Handle bot mentions and replies in group chats."""
@@ -445,5 +517,10 @@ async def handle_mention(message: types.Message, user_context: dict = None):
     question = _extract_question(message)
     if question is None:
         return  # not addressed to the bot
+
+    # Meetings module gets first crack — if it's a meeting request, handle
+    # it without touching the LLM orchestrator (no credits spent).
+    if await _maybe_handle_meeting(message, question, user_context):
+        return
 
     await process_question(message, question, user_context)
