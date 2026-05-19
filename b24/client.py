@@ -205,6 +205,11 @@ class Bitrix24Client:
         Lean select — only fields needed for typical reports. Removed
         DATE_MODIFY/LAST_NAME/COMPANY_TITLE/CURRENCY_ID/UTM_CONTENT/UTM_TERM
         to shrink payload ~35%. For full data use get_lead_full per ID.
+
+        UF_CRM_1723465843 = freeform "причина отказа" (refusal reason),
+        filled by managers on JUNK leads. Kept in lean select so analysis
+        of refusal causes works in a single get_leads call without fanning
+        out to get_card_comments per lead.
         """
         params = {
             "filter": {},
@@ -214,6 +219,7 @@ class Bitrix24Client:
                 "DATE_CREATE", "ASSIGNED_BY_ID", "NAME",
                 "SOURCE_ID", "SOURCE_DESCRIPTION", "WEBFORM_ID",
                 "UTM_SOURCE", "UTM_MEDIUM", "UTM_CAMPAIGN",
+                "UF_CRM_1723465843",
             ]
         }
 

@@ -67,6 +67,8 @@ class ToolHandlers:
                 return await self.get_deal_full(tool_input, user_context)
             elif tool_name == "get_card_comments":
                 return await self.get_card_comments(tool_input, user_context)
+            elif tool_name == "analyze_junk_leads":
+                return await self.analyze_junk_leads(tool_input, user_context)
             elif tool_name == "metrika_traffic_summary":
                 return await self.metrika_traffic_summary(tool_input, user_context)
             elif tool_name == "metrika_traffic_by_source":
@@ -490,6 +492,123 @@ class ToolHandlers:
             for c in comments
         ]
         return {"deal": enriched}
+
+    async def analyze_junk_leads(self, params: Dict[str, Any], user_context: Dict[str, Any]) -> Dict[str, Any]:
+        """Aggregate JUNK leads for a period and group them by refusal reason.
+
+        Reads UF_CRM_1723465843 (free-text reason filled by managers) from
+        get_leads in one call and clusters near-duplicates. Replaces the
+        previous LLM strategy of calling get_card_comments per lead, which
+        burned the 8-call circuit breaker.
+
+        Grouping is intentionally simple — strip whitespace, lowercase,
+        cut multiline notes to the first meaningful line, dedup by that
+        normalized key. Distinct phrasings ("дорого" vs "видимо дорого")
+        stay separate; the LLM can merge them in the final answer.
+        """
+        err = _validate_params(params, date_keys=("date_from", "date_to"), stage_key="not_used")
+        if err:
+            return err
+
+        date_from = params.get("date_from")
+        date_to = params.get("date_to")
+        if not date_from or not date_to:
+            return {"error": "date_from и date_to обязательны (формат YYYY-MM-DD)"}
+
+        b24_user_ids = user_context.get("b24_user_ids", [])
+        if not b24_user_ids and not user_context.get("is_admin", False):
+            return {"summary": {}, "message": "No assigned users configured"}
+
+        limit = min(int(params.get("limit") or 100), 200)
+        top_n = max(1, int(params.get("top_n") or 8))
+
+        client = await self._get_client()
+        leads = await client.get_leads(
+            assigned_by_ids=b24_user_ids,
+            filter_by_status="JUNK",
+            filter_by_date_from=date_from,
+            filter_by_date_to=date_to,
+            filter_by_source_ids=params.get("source_ids"),
+            filter_by_title_contains=params.get("title_contains"),
+            limit=limit,
+        )
+
+        if isinstance(leads, dict) and "error" in leads:
+            return leads
+        if not isinstance(leads, list):
+            return {"error": "Bitrix вернул неожиданный формат"}
+
+        total = len(leads)
+        with_reason: List[Dict[str, Any]] = []
+        without_reason_ids: List[int] = []
+
+        def _normalize(raw: str) -> str:
+            if not raw:
+                return ""
+            # Multiline notes ("18.05 - первое касание\n---ндз\n---ндз 2..." etc).
+            # Keep just the first non-trivial line so duplicate notes collapse.
+            first_line = next(
+                (ln.strip(" -—\t").strip() for ln in raw.splitlines() if ln.strip(" -—\t").strip()),
+                "",
+            )
+            return " ".join(first_line.lower().split())[:80]
+
+        groups: Dict[str, Dict[str, Any]] = {}
+        for lead in leads:
+            lead_id = lead.get("ID")
+            raw_reason = (lead.get("UF_CRM_1723465843") or "").strip()
+            if not raw_reason:
+                if lead_id:
+                    without_reason_ids.append(int(lead_id))
+                continue
+
+            key = _normalize(raw_reason)
+            if not key:
+                if lead_id:
+                    without_reason_ids.append(int(lead_id))
+                continue
+
+            entry = groups.setdefault(key, {
+                "reason_example": raw_reason[:200],
+                "count": 0,
+                "lead_ids": [],
+            })
+            entry["count"] += 1
+            if lead_id and len(entry["lead_ids"]) < 10:
+                entry["lead_ids"].append(int(lead_id))
+
+            with_reason.append({
+                "id": lead_id,
+                "title": (lead.get("TITLE") or "")[:80],
+                "source": lead.get("SOURCE_ID"),
+                "reason": raw_reason[:200],
+                "card_url": client.lead_url(lead_id) if lead_id else None,
+            })
+
+        top_groups = sorted(groups.values(), key=lambda g: g["count"], reverse=True)[:top_n]
+        examples = with_reason[:5]
+
+        return {
+            "period": {"from": date_from, "to": date_to},
+            "filters": {
+                "source_ids": params.get("source_ids"),
+                "title_contains": params.get("title_contains"),
+            },
+            "summary": {
+                "total_junk": total,
+                "with_reason": len(with_reason),
+                "without_reason": len(without_reason_ids),
+                "unique_reason_groups": len(groups),
+            },
+            "top_reasons": top_groups,
+            "examples": examples,
+            "without_reason_lead_ids": without_reason_ids[:20],
+            "note": (
+                "top_reasons сгруппированы по нормализованной первой строке причины. "
+                "Близкие по смыслу формулировки могут попасть в разные группы — "
+                "объедини их в финальном ответе."
+            ),
+        }
 
     async def get_card_comments(self, params: Dict[str, Any], user_context: Dict[str, Any]) -> Dict[str, Any]:
         """Get manager-written comments from a lead or deal card timeline."""

@@ -13,6 +13,15 @@ from db.repositories import audit as audit_repo, sessions as sessions_repo
 from ai.prompts import get_system_prompt
 from ai.orchestrator import Orchestrator
 
+
+def _active_model_name() -> str:
+    """Real model behind the LLM provider — used as audit fallback when
+    the upstream response didn't carry a model name (e.g. exception path)."""
+    provider = (settings.llm_provider or "kie").lower()
+    if provider == "deepseek":
+        return settings.deepseek_model or "deepseek-v4-flash"
+    return "claude-sonnet-4-6"
+
 logger = structlog.get_logger()
 
 router = Router()
@@ -344,7 +353,18 @@ async def process_question(
         )
 
         answer = _sanitize_answer(response.get("answer", "Ошибка: нет ответа"))
-        model = response.get("model", "claude-sonnet-4-6")
+        # Empty answer can come back when:
+        # - orchestrator hit Max iterations with no synthesized text
+        # - sanitizer stripped a body that was 100% DSML/tech leakage
+        # Telegram rejects edit_text with empty body → handler errored out
+        # logging a separate "message text is empty" audit row. Substitute
+        # a friendly fallback so the user sees something coherent.
+        if not (answer or "").strip():
+            answer = (
+                "Не удалось собрать ответ за разумное число шагов. "
+                "Переформулируйте запрос — уточните период, источник или сузьте критерий поиска."
+            )
+        model = response.get("model") or _active_model_name()
         tools_called = response.get("tools_called", [])
         duration_ms = response.get("duration_ms", 0)
         error = response.get("error")
@@ -414,7 +434,7 @@ async def process_question(
             chat_id=chat_id,
             chat_type=message.chat.type,
             question=question,
-            model_used="claude-sonnet-4-6",
+            model_used=_active_model_name(),
             error=str(e),
             duration_ms=duration_ms,
         )

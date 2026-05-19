@@ -32,6 +32,7 @@ class Orchestrator:
         self.max_iterations = settings.max_iterations
         self.max_input_tokens = settings.max_request_input_tokens
         self.max_credits = settings.max_request_credits
+        self.max_tool_calls = settings.max_tool_calls_per_request
         self.tool_definitions = get_tools_definitions()
         # When cumulative input passes this fraction of the hard limit,
         # trim old tool_results down to a placeholder. Keeps the most
@@ -136,9 +137,13 @@ class Orchestrator:
         total_input_tokens = 0
         # Logical model name from router (e.g. claude-sonnet-4-6) — may not
         # match the model that actually served (DeepSeek substitutes its own).
-        # actual_model is updated from each response so audit_log records what
-        # actually answered.
-        actual_model = model
+        # Seed actual_model from the provider config so audit_log is correct
+        # even if the very first call fails before we see a response.model.
+        provider = (settings.llm_provider or "kie").lower()
+        if provider == "deepseek":
+            actual_model = settings.deepseek_model or model
+        else:
+            actual_model = model
 
         trim_at = int(self.max_input_tokens * self.trim_threshold_ratio)
 
@@ -169,18 +174,31 @@ class Orchestrator:
                 total_input_tokens += int(response.get("usage", {}).get("input_tokens", 0))
                 actual_model = response.get("model") or actual_model
 
-                # CIRCUIT BREAKER L1 — per-request token/credit ceiling.
+                # CIRCUIT BREAKER L1 — per-request token/credit/tool-call ceiling.
                 # Triggered after Claude has actually been called, so we know
                 # the real cost so far. Prevents runaway costs from a single
                 # bad question (worst case we've seen: 83 cr in 6 iterations).
-                if total_input_tokens > self.max_input_tokens or total_credits > self.max_credits:
+                # Tool-call counter catches fan-out cases (e.g. 14× get_card_comments
+                # for one "analyze refusals" question) before they burn the budget.
+                tripped_reason = None
+                if total_input_tokens > self.max_input_tokens:
+                    tripped_reason = "input_tokens"
+                elif total_credits > self.max_credits:
+                    tripped_reason = "credits"
+                elif len(tools_called) >= self.max_tool_calls:
+                    tripped_reason = "tool_calls"
+
+                if tripped_reason:
                     logger.warning(
                         "Circuit breaker tripped (per-request limit)",
+                        reason=tripped_reason,
                         iteration=iteration,
                         total_input_tokens=total_input_tokens,
                         total_credits=total_credits,
+                        tool_calls_count=len(tools_called),
                         max_input_tokens=self.max_input_tokens,
                         max_credits=self.max_credits,
+                        max_tool_calls=self.max_tool_calls,
                         tools_called=tools_called,
                     )
                     return {
@@ -189,7 +207,7 @@ class Orchestrator:
                             "Попробуйте сформулировать запрос конкретнее — например, добавьте период, "
                             "конкретную воронку или сузьте критерий поиска."
                         ),
-                        "error": "circuit_breaker_per_request",
+                        "error": f"circuit_breaker_per_request:{tripped_reason}",
                         "model": actual_model,
                         "iterations": iteration,
                         "tools_called": tools_called,
