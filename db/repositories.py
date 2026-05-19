@@ -252,8 +252,187 @@ class AuditRepository:
         logger.info("Cleaned up old audit logs")
 
 
+class ChatMembersRepository:
+    """People (not bots) seen writing in a chat. Used for participant picker."""
+
+    async def upsert(
+        self,
+        chat_id: int,
+        user_id: int,
+        full_name: str = None,
+        username: str = None,
+    ):
+        await db.execute(
+            """INSERT INTO chat_members (chat_id, user_id, full_name, username, last_seen_at)
+               VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+               ON CONFLICT(chat_id, user_id)
+               DO UPDATE SET full_name=excluded.full_name,
+                             username=excluded.username,
+                             last_seen_at=CURRENT_TIMESTAMP""",
+            (chat_id, user_id, full_name, username),
+        )
+        await db.commit()
+
+    async def list_for_chat(self, chat_id: int) -> List[Dict[str, Any]]:
+        rows = await db.fetch_all(
+            """SELECT user_id, full_name, username, last_seen_at
+               FROM chat_members WHERE chat_id = ?
+               ORDER BY last_seen_at DESC""",
+            (chat_id,),
+        )
+        return [dict(r) for r in rows] if rows else []
+
+
+class MeetingPollsRepository:
+    async def create(
+        self,
+        chat_id: int,
+        initiator_id: int,
+        meeting_date: str,
+        duration_min: int,
+        topic: str,
+        deadline_at: str,
+    ) -> int:
+        cur = await db.execute(
+            """INSERT INTO meeting_polls
+               (chat_id, initiator_id, meeting_date, duration_min, topic, status, deadline_at)
+               VALUES (?, ?, ?, ?, ?, 'picking_participants', ?)""",
+            (chat_id, initiator_id, meeting_date, duration_min, topic, deadline_at),
+        )
+        await db.commit()
+        return cur.lastrowid
+
+    async def get(self, poll_id: int) -> Optional[Dict[str, Any]]:
+        row = await db.fetch_one(
+            "SELECT * FROM meeting_polls WHERE id = ?", (poll_id,)
+        )
+        return dict(row) if row else None
+
+    async def update(self, poll_id: int, **fields):
+        if not fields:
+            return
+        sets = ", ".join(f"{k} = ?" for k in fields.keys())
+        values = list(fields.values()) + [poll_id]
+        await db.execute(f"UPDATE meeting_polls SET {sets} WHERE id = ?", values)
+        await db.commit()
+
+    async def add_participant(self, poll_id: int, user_id: int, full_name: str = None):
+        await db.execute(
+            """INSERT OR REPLACE INTO meeting_poll_participants (poll_id, user_id, full_name)
+               VALUES (?, ?, ?)""",
+            (poll_id, user_id, full_name),
+        )
+        await db.commit()
+
+    async def remove_participant(self, poll_id: int, user_id: int):
+        await db.execute(
+            "DELETE FROM meeting_poll_participants WHERE poll_id = ? AND user_id = ?",
+            (poll_id, user_id),
+        )
+        await db.commit()
+
+    async def list_participants(self, poll_id: int) -> List[Dict[str, Any]]:
+        rows = await db.fetch_all(
+            "SELECT user_id, full_name FROM meeting_poll_participants WHERE poll_id = ?",
+            (poll_id,),
+        )
+        return [dict(r) for r in rows] if rows else []
+
+    async def set_vote(self, poll_id: int, slot_hour: int, user_id: int, vote: Optional[str]):
+        """Set vote to 'yes'/'no', or None to clear (delete)."""
+        if vote is None:
+            await db.execute(
+                "DELETE FROM meeting_poll_votes WHERE poll_id=? AND slot_hour=? AND user_id=?",
+                (poll_id, slot_hour, user_id),
+            )
+        else:
+            await db.execute(
+                """INSERT INTO meeting_poll_votes (poll_id, slot_hour, user_id, vote)
+                   VALUES (?, ?, ?, ?)
+                   ON CONFLICT(poll_id, slot_hour, user_id) DO UPDATE SET vote=excluded.vote""",
+                (poll_id, slot_hour, user_id, vote),
+            )
+        await db.commit()
+
+    async def get_vote(self, poll_id: int, slot_hour: int, user_id: int) -> Optional[str]:
+        row = await db.fetch_one(
+            "SELECT vote FROM meeting_poll_votes WHERE poll_id=? AND slot_hour=? AND user_id=?",
+            (poll_id, slot_hour, user_id),
+        )
+        return row["vote"] if row else None
+
+    async def get_all_votes(self, poll_id: int) -> List[Dict[str, Any]]:
+        rows = await db.fetch_all(
+            "SELECT slot_hour, user_id, vote FROM meeting_poll_votes WHERE poll_id=?",
+            (poll_id,),
+        )
+        return [dict(r) for r in rows] if rows else []
+
+    async def list_expired_open(self) -> List[Dict[str, Any]]:
+        """Polls past deadline but not finalized."""
+        rows = await db.fetch_all(
+            """SELECT * FROM meeting_polls
+               WHERE status IN ('picking_participants', 'voting')
+                 AND deadline_at IS NOT NULL
+                 AND deadline_at <= CURRENT_TIMESTAMP""",
+        )
+        return [dict(r) for r in rows] if rows else []
+
+
+class ScheduledMeetingsRepository:
+    async def create(
+        self,
+        chat_id: int,
+        initiator_id: Optional[int],
+        topic: str,
+        start_at_utc_iso: str,
+        duration_min: int,
+        zoom_meeting_id: str,
+        zoom_join_url: str,
+        zoom_start_url: str,
+        participants: List[Dict[str, Any]],
+    ) -> int:
+        cur = await db.execute(
+            """INSERT INTO scheduled_meetings
+               (chat_id, initiator_id, topic, start_at, duration_min,
+                zoom_meeting_id, zoom_join_url, zoom_start_url, participants_json)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                chat_id, initiator_id, topic, start_at_utc_iso, duration_min,
+                zoom_meeting_id, zoom_join_url, zoom_start_url,
+                json.dumps(participants, ensure_ascii=False),
+            ),
+        )
+        await db.commit()
+        return cur.lastrowid
+
+    async def due_for_reminder(self, minutes_before: int) -> List[Dict[str, Any]]:
+        """Meetings starting in (minutes_before .. minutes_before+5) min that
+        haven't had a reminder sent yet."""
+        now = datetime.utcnow()
+        lower = (now + timedelta(minutes=minutes_before)).isoformat()
+        upper = (now + timedelta(minutes=minutes_before + 5)).isoformat()
+        rows = await db.fetch_all(
+            """SELECT * FROM scheduled_meetings
+               WHERE reminder_sent_at IS NULL
+                 AND start_at BETWEEN ? AND ?""",
+            (lower, upper),
+        )
+        return [dict(r) for r in rows] if rows else []
+
+    async def mark_reminder_sent(self, meeting_id: int):
+        await db.execute(
+            "UPDATE scheduled_meetings SET reminder_sent_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (meeting_id,),
+        )
+        await db.commit()
+
+
 # Repository instances
 users = UserRepository()
 settings = SettingsRepository()
 sessions = SessionRepository()
 audit = AuditRepository()
+chat_members = ChatMembersRepository()
+meeting_polls = MeetingPollsRepository()
+scheduled_meetings = ScheduledMeetingsRepository()
