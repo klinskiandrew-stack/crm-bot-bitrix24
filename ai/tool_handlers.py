@@ -10,6 +10,7 @@ from metrika.client import metrika_client
 from sheets.lus_client import lus_client
 from sheets.pnl_client import pnl_client
 from avito.client import avito_client
+from exports.leads_excel import build_leads_xlsx
 from config import settings
 
 logger = structlog.get_logger()
@@ -90,6 +91,20 @@ def _resolve_direction(raw: Any, mapping: Dict[int, str]) -> str:
     return mapping.get(key, f"#{key}")
 
 
+def _sees_all_crm(user_context: Dict[str, Any]) -> bool:
+    """True if the user may read CRM data beyond their own b24_user_ids.
+
+    Admins always can. The контекстолог (role 'partner') was granted
+    read-only access to all leads/deals so they can analyse ad
+    performance across every manager — see the access decision in the
+    project notes. Empty b24_user_ids then means 'no ASSIGNED_BY filter'
+    i.e. everything, exactly like an admin.
+    """
+    if user_context.get("is_admin"):
+        return True
+    return user_context.get("role") == "partner"
+
+
 def _validate_params(params: Dict[str, Any], date_keys=("filter_by_date_from", "filter_by_date_to", "date_from", "date_to"), stage_key="filter_by_stage"):
     """Validate common Bitrix24 param formats. Returns None if OK, error dict if invalid."""
     for k in date_keys:
@@ -144,6 +159,8 @@ class ToolHandlers:
                 return await self.analyze_junk_leads(tool_input, user_context)
             elif tool_name == "analyze_junk_deals":
                 return await self.analyze_junk_deals(tool_input, user_context)
+            elif tool_name == "export_leads_to_excel":
+                return await self.export_leads_to_excel(tool_input, user_context)
             elif tool_name == "metrika_traffic_summary":
                 return await self.metrika_traffic_summary(tool_input, user_context)
             elif tool_name == "metrika_traffic_by_source":
@@ -254,9 +271,8 @@ class ToolHandlers:
 
         client = await self._get_client()
         b24_user_ids = user_context.get("b24_user_ids", [])
-        is_admin = user_context.get("is_admin", False)
 
-        if not b24_user_ids and not is_admin:
+        if not b24_user_ids and not _sees_all_crm(user_context):
             return {"deals": [], "message": "No assigned users configured"}
 
         deals = await client.get_deals(
@@ -318,7 +334,7 @@ class ToolHandlers:
         client = await self._get_client()
         b24_user_ids = user_context.get("b24_user_ids", [])
 
-        if not b24_user_ids and not user_context.get("is_admin", False):
+        if not b24_user_ids and not _sees_all_crm(user_context):
             return {"leads": [], "message": "No assigned users configured"}
 
         err = _validate_params(params, stage_key="not_used")
@@ -364,7 +380,7 @@ class ToolHandlers:
         if not query:
             return {"error": "query is required"}
 
-        if not b24_user_ids and not user_context.get("is_admin", False):
+        if not b24_user_ids and not _sees_all_crm(user_context):
             return {"results": [], "message": "No assigned users configured"}
 
         contacts = await client.search_contacts(
@@ -390,7 +406,7 @@ class ToolHandlers:
         client = await self._get_client()
         b24_user_ids = user_context.get("b24_user_ids", [])
 
-        if not b24_user_ids and not user_context.get("is_admin", False):
+        if not b24_user_ids and not _sees_all_crm(user_context):
             return {"summary": {}, "message": "No assigned users configured"}
 
         deals = await client.get_deals(
@@ -447,7 +463,7 @@ class ToolHandlers:
         client = await self._get_client()
         b24_user_ids = user_context.get("b24_user_ids", [])
 
-        if not b24_user_ids and not user_context.get("is_admin", False):
+        if not b24_user_ids and not _sees_all_crm(user_context):
             return {"summary": {}, "message": "No assigned users configured"}
 
         date_from = params.get("date_from")
@@ -494,7 +510,7 @@ class ToolHandlers:
         client = await self._get_client()
         b24_user_ids = user_context.get("b24_user_ids", [])
 
-        if not b24_user_ids and not user_context.get("is_admin", False):
+        if not b24_user_ids and not _sees_all_crm(user_context):
             return {"activities": [], "message": "No assigned users configured"}
 
         days_back = params.get("days_back", 7)
@@ -604,7 +620,7 @@ class ToolHandlers:
             return {"error": "date_from и date_to обязательны (формат YYYY-MM-DD)"}
 
         b24_user_ids = user_context.get("b24_user_ids", [])
-        if not b24_user_ids and not user_context.get("is_admin", False):
+        if not b24_user_ids and not _sees_all_crm(user_context):
             return {"summary": {}, "message": "No assigned users configured"}
 
         limit = min(int(params.get("limit") or 100), 200)
@@ -721,7 +737,7 @@ class ToolHandlers:
             return {"error": "date_from и date_to обязательны (формат YYYY-MM-DD)"}
 
         b24_user_ids = user_context.get("b24_user_ids", [])
-        if not b24_user_ids and not user_context.get("is_admin", False):
+        if not b24_user_ids and not _sees_all_crm(user_context):
             return {"summary": {}, "message": "No assigned users configured"}
 
         limit = min(int(params.get("limit") or 100), 200)
@@ -803,6 +819,111 @@ class ToolHandlers:
             "note": (
                 "Причины — структурированный enum из карточки сделки (19 значений), "
                 "поэтому группировка точная, без слияния похожих формулировок."
+            ),
+        }
+
+    async def export_leads_to_excel(self, params: Dict[str, Any], user_context: Dict[str, Any]) -> Dict[str, Any]:
+        """Build an .xlsx of leads and send it to the chat as a document.
+
+        Unlike other tools, this one has a side effect: it pushes a file
+        straight to Telegram via the bot handle injected into user_context
+        as `_bot` / `_chat_id` by the message handler. The tool_result the
+        LLM gets back is just a short confirmation string.
+
+        Access: admins + the contextologist (role 'partner'). Today the
+        only partner is the Директолог; if more partners are added later
+        this opens to them too — tighten to an ID allowlist if needed.
+        """
+        is_admin = user_context.get("is_admin", False)
+        role = user_context.get("role", "")
+        if not (is_admin or role == "partner"):
+            return {"error": "Выгрузка в Excel доступна только администраторам и директологу."}
+
+        bot = user_context.get("_bot")
+        chat_id = user_context.get("_chat_id")
+        if bot is None or chat_id is None:
+            return {"error": "Не удалось отправить файл — нет доступа к чату (внутренняя ошибка)."}
+
+        err = _validate_params(params, date_keys=("date_from", "date_to"), stage_key="not_used")
+        if err:
+            return err
+
+        b24_user_ids = user_context.get("b24_user_ids", [])
+        if not b24_user_ids and not _sees_all_crm(user_context):
+            return {"leads": [], "message": "No assigned users configured"}
+
+        date_from = params.get("date_from")
+        date_to = params.get("date_to")
+        # Export limit is deliberately high — a month of leads can be 1000+.
+        limit = min(int(params.get("limit") or 1000), 3000)
+
+        client = await self._get_client()
+        leads = await client.get_leads(
+            assigned_by_ids=b24_user_ids,
+            filter_by_status=params.get("filter_by_status"),
+            filter_by_date_from=date_from,
+            filter_by_date_to=date_to,
+            filter_by_source_ids=params.get("source_ids"),
+            filter_by_direction_ids=params.get("direction_ids"),
+            include_full_utm=True,
+            limit=limit,
+        )
+
+        if isinstance(leads, dict) and "error" in leads:
+            return leads
+        if not isinstance(leads, list):
+            return {"error": "Bitrix вернул неожиданный формат"}
+
+        if not leads:
+            return {
+                "status": "no_data",
+                "message": "За указанный период/фильтр лидов не найдено — файл не отправлен.",
+            }
+
+        # Resolve enum direction to a label for each row (get_leads handler
+        # does this too, but here we call the b24 client directly to pass
+        # include_full_utm).
+        for lead in leads:
+            lead["direction"] = _resolve_direction(
+                lead.get("UF_CRM_1696239286"), LEAD_DIRECTIONS,
+            )
+            lead["card_url"] = client.lead_url(lead.get("ID"))
+
+        try:
+            xlsx_bytes = build_leads_xlsx(leads)
+        except Exception as e:
+            logger.error("Excel build failed", error=str(e))
+            return {"error": f"Не удалось сформировать Excel-файл: {e}"}
+
+        # Latin filename — Cyrillic in document names is flaky across clients.
+        if date_from and date_to:
+            fname = f"leads_{date_from}_{date_to}.xlsx"
+            period_label = f"{date_from} — {date_to}"
+        else:
+            fname = "leads_export.xlsx"
+            period_label = "весь доступный период"
+
+        caption = f"Лиды из CRM ({period_label}) — {len(leads)} шт."
+
+        try:
+            from aiogram.types import BufferedInputFile
+            await bot.send_document(
+                chat_id,
+                document=BufferedInputFile(xlsx_bytes, filename=fname),
+                caption=caption,
+            )
+        except Exception as e:
+            logger.error("send_document failed", error=str(e), chat_id=chat_id)
+            return {"error": f"Файл сформирован, но не отправился в чат: {e}"}
+
+        logger.info("Leads Excel exported", count=len(leads), chat_id=chat_id, file=fname)
+        return {
+            "status": "sent",
+            "lead_count": len(leads),
+            "filename": fname,
+            "message": (
+                f"Файл {fname} с {len(leads)} лидами отправлен в чат. "
+                "Коротко подтверди это пользователю, не пересказывай содержимое."
             ),
         }
 

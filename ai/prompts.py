@@ -214,7 +214,7 @@ def get_system_prompt(
 get_deals, get_deal_details, get_deal_full, get_leads, get_lead_full,
 search_contacts_or_companies, get_pipeline_summary, get_user_activity_summary,
 get_recent_activities, count_deals_passed_stage, get_card_comments,
-analyze_junk_leads, analyze_junk_deals,
+analyze_junk_leads, analyze_junk_deals, export_leads_to_excel,
 metrika_traffic_summary, metrika_traffic_by_source,
 lus_financials, lus_get_deal, lus_search,
 pnl_summary, pnl_articles, pnl_month,
@@ -586,6 +586,20 @@ SOURCE_DESCRIPTION в карточке лида/сделки. UTM-метки —
 
 В ответах бот уже резолвит ID → русское название (поле direction в
 каждом лиде/сделке), используй его при выводе.
+
+================================================================
+ВЫГРУЗКА ЛИДОВ В EXCEL:
+================================================================
+
+Если пользователь просит «выгрузи лиды», «скинь лиды файлом / эксель /
+таблицей», «экспорт лидов» — вызови export_leads_to_excel. Инструмент
+сам формирует .xlsx и отправляет его в чат как документ.
+- Передай период (date_from / date_to) и фильтры, если они есть в запросе
+  (статус, источник, направление). Если период не назван — не указывай его.
+- Доступ только у администраторов и директолога. Если прав нет — инструмент
+  вернёт ошибку, просто передай её пользователю вежливо.
+- ПОСЛЕ успешной выгрузки НЕ пересказывай содержимое файла и не вызывай
+  get_leads — просто коротко подтверди «Готово, файл отправлен».
 
 ================================================================
 

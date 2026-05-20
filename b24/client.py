@@ -212,6 +212,7 @@ class Bitrix24Client:
         filter_by_title_contains: Optional[str] = None,
         filter_by_utm_source: Optional[str] = None,
         filter_by_direction_ids: Optional[List[int]] = None,
+        include_full_utm: bool = False,
         limit: int = 50,
     ) -> List[Dict[str, Any]]:
         """Get leads for assigned users.
@@ -219,6 +220,10 @@ class Bitrix24Client:
         Lean select — only fields needed for typical reports. Removed
         DATE_MODIFY/LAST_NAME/COMPANY_TITLE/CURRENCY_ID/UTM_CONTENT/UTM_TERM
         to shrink payload ~35%. For full data use get_lead_full per ID.
+
+        include_full_utm=True adds UTM_CONTENT + UTM_TERM — the ad-creative
+        and keyword fields the contextologist needs for the Excel export.
+        They're left out of the default select to keep report payloads small.
 
         UF fields kept in lean select:
         - UF_CRM_1723465843 = freeform "причина отказа" (refusal reason),
@@ -229,16 +234,19 @@ class Bitrix24Client:
           183=Рулонный газон, 133=Автополив другие города, 151=Ландшафтный
           дизайн, 599=Ландшафтное освещение.
         """
+        select = [
+            "ID", "TITLE", "STATUS_ID", "STATUS_SEMANTIC_ID",
+            "OPPORTUNITY",
+            "DATE_CREATE", "ASSIGNED_BY_ID", "NAME",
+            "SOURCE_ID", "SOURCE_DESCRIPTION", "WEBFORM_ID",
+            "UTM_SOURCE", "UTM_MEDIUM", "UTM_CAMPAIGN",
+            "UF_CRM_1723465843", "UF_CRM_1696239286",
+        ]
+        if include_full_utm:
+            select += ["UTM_CONTENT", "UTM_TERM"]
         params = {
             "filter": {},
-            "select": [
-                "ID", "TITLE", "STATUS_ID", "STATUS_SEMANTIC_ID",
-                "OPPORTUNITY",
-                "DATE_CREATE", "ASSIGNED_BY_ID", "NAME",
-                "SOURCE_ID", "SOURCE_DESCRIPTION", "WEBFORM_ID",
-                "UTM_SOURCE", "UTM_MEDIUM", "UTM_CAMPAIGN",
-                "UF_CRM_1723465843", "UF_CRM_1696239286",
-            ]
+            "select": select,
         }
 
         if assigned_by_ids:

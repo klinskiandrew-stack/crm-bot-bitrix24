@@ -344,9 +344,18 @@ async def process_question(
             assigned_user_ids=user_context["b24_user_ids"],
         )
 
+        # Inject the bot handle + chat id so file-producing tools
+        # (export_leads_to_excel) can push a document straight to the chat.
+        # Underscore-prefixed keys = runtime injection, not auth data.
+        tool_context = {
+            **user_context,
+            "_bot": message.bot,
+            "_chat_id": chat_id,
+        }
+
         response = await orchestrator.process_message(
             question=question,
-            user_context=user_context,
+            user_context=tool_context,
             system_prompt=system_prompt,
             history=history,
             progress_callback=_progress,

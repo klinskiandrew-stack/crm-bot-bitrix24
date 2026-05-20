@@ -6,6 +6,7 @@ anthropic
 apscheduler>=3.10.0
 gspread>=6.0.0
 google-auth>=2.0.0
+openpyxl>=3.1.0
 pydantic
 pydantic-settings
 python-dotenv>=1.0.0
