@@ -116,6 +116,40 @@ async def mark_error(lead_id: int, error: str) -> None:
     await db.commit()
 
 
+async def get_by_id(lead_id: int) -> Dict[str, Any]:
+    """Fetch one lead row by id (empty dict if missing)."""
+    row = await db.fetch_one("SELECT * FROM lead_reports WHERE id = ?", (lead_id,))
+    return dict(row) if row else {}
+
+
+async def get_pending_analysis(limit: int = 100) -> List[Dict[str, Any]]:
+    """Transcribed leads still awaiting AI analysis."""
+    rows = await db.fetch_all(
+        "SELECT * FROM lead_reports WHERE status = 'transcribed' "
+        "ORDER BY id ASC LIMIT ?",
+        (limit,),
+    )
+    return [dict(r) for r in rows]
+
+
+async def update_analysis(
+    lead_id: int,
+    summary: str,
+    client_need: str,
+    manager_score,
+    manager_comment: str,
+    lead_temp: str,
+) -> None:
+    """Store the AI verdict; status → done."""
+    await db.execute(
+        "UPDATE lead_reports SET ai_summary = ?, ai_client_need = ?, "
+        "ai_manager_score = ?, ai_manager_comment = ?, ai_lead_temp = ?, "
+        "status = 'done', processed_at = CURRENT_TIMESTAMP WHERE id = ?",
+        (summary, client_need, manager_score, manager_comment, lead_temp, lead_id),
+    )
+    await db.commit()
+
+
 async def get_exportable(limit: int = 500) -> List[Dict[str, Any]]:
     """Transcribed leads not yet pushed to the Google Sheet."""
     rows = await db.fetch_all(
