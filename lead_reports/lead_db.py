@@ -151,10 +151,14 @@ async def update_analysis(
 
 
 async def get_exportable(limit: int = 500) -> List[Dict[str, Any]]:
-    """Transcribed leads not yet pushed to the Google Sheet."""
+    """Fully processed leads (status='done') not yet in the Google Sheet.
+
+    Only 'done' — so a row reaches the sheet with its AI columns already
+    filled, never half-empty.
+    """
     rows = await db.fetch_all(
         "SELECT * FROM lead_reports "
-        "WHERE status IN ('transcribed', 'done') AND exported_at IS NULL "
+        "WHERE status = 'done' AND exported_at IS NULL "
         "ORDER BY id ASC LIMIT ?",
         (limit,),
     )

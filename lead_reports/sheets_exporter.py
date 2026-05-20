@@ -29,6 +29,10 @@ HEADERS = [
     "Расшифровка звонка",
     "Ссылка на запись",
     "Статус",
+    "Резюме (AI)",
+    "Потребность клиента (AI)",
+    "Оценка менеджера (AI)",
+    "Температура лида (AI)",
 ]
 
 _STATUS_RU = {
@@ -64,8 +68,17 @@ def _client() -> gspread.Client:
     return _gc
 
 
+def _manager_score_cell(lead: Dict[str, Any]) -> str:
+    """Combine the 1-5 score and its comment into one cell."""
+    score = lead.get("ai_manager_score")
+    comment = lead.get("ai_manager_comment") or ""
+    if score is None:
+        return comment
+    return f"{score}/5 — {comment}".rstrip(" —")
+
+
 def _lead_to_row(lead: Dict[str, Any]) -> List[str]:
-    """Map a lead_reports row to the 9 sheet columns."""
+    """Map a lead_reports row to the 13 sheet columns."""
     return [
         lead.get("call_datetime") or "",
         lead.get("company") or "",
@@ -76,6 +89,10 @@ def _lead_to_row(lead: Dict[str, Any]) -> List[str]:
         lead.get("transcript") or "",
         lead.get("recording_url") or "",
         _STATUS_RU.get(lead.get("status"), lead.get("status") or ""),
+        lead.get("ai_summary") or "",
+        lead.get("ai_client_need") or "",
+        _manager_score_cell(lead),
+        lead.get("ai_lead_temp") or "",
     ]
 
 
