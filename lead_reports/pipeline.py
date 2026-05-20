@@ -11,7 +11,7 @@ from typing import Any, Dict
 
 import structlog
 
-from lead_reports import audio_processor, lead_db, stt
+from lead_reports import audio_processor, lead_db, sheets_exporter, stt
 
 logger = structlog.get_logger()
 
@@ -43,7 +43,16 @@ async def transcribe_pending(limit: int = 100) -> Dict[str, Any]:
         stt.unload()  # free ~1.2GB until the next batch
         result = {"processed": len(leads), "ok": ok, "failed": failed}
         logger.info("Transcription batch finished", **result)
-        return result
+
+    # Push the freshly transcribed leads to the Google Sheet. Outside the
+    # STT lock — it's just network I/O, no RAM contention.
+    try:
+        export = await sheets_exporter.export_pending()
+        result["exported"] = export.get("exported", 0)
+    except Exception as e:
+        logger.error("Post-batch sheet export failed", error=str(e))
+        result["exported"] = 0
+    return result
 
 
 def trigger_transcription_bg(limit: int = 100) -> None:

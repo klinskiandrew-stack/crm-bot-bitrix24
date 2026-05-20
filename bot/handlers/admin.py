@@ -287,3 +287,32 @@ async def transcribe_pending_command(message: types.Message, user_context: dict 
 
     asyncio.create_task(_run())
     logger.info("Transcription backfill triggered", admin_id=user_context["telegram_id"])
+
+
+@router.message(Command("export_leads_sheet"))
+async def export_leads_sheet_command(message: types.Message, user_context: dict = None):
+    """Export transcribed lead calls to the Google Sheet."""
+    if not is_admin(user_context):
+        await message.answer("Доступ запрещен.")
+        return
+
+    from lead_reports.sheets_exporter import export_pending, is_enabled
+
+    if not is_enabled():
+        await message.answer(
+            "⚠️ Экспорт не настроен: задай LEAD_REPORTS_SHEET_ID в .env "
+            "и дай сервисному аккаунту доступ к таблице."
+        )
+        return
+
+    await message.answer("📤 Выгружаю расшифровки в Google-таблицу...")
+    try:
+        res = await export_pending(limit=1000)
+        if res.get("error"):
+            await message.answer(f"⚠️ Ошибка экспорта: {res['error']}")
+        else:
+            await message.answer(f"✅ Выгружено строк: {res.get('exported', 0)}")
+        logger.info("Sheet export triggered", admin_id=user_context["telegram_id"])
+    except Exception as e:
+        logger.error("export_leads_sheet command failed", error=str(e))
+        await message.answer(f"⚠️ Ошибка: {e}")

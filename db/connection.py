@@ -34,6 +34,7 @@ class Database:
 
         # Patch existing databases — add new columns idempotently
         await self._ensure_column("users", "allow_private", "INTEGER DEFAULT 1")
+        await self._ensure_column("lead_reports", "exported_at", "TIMESTAMP")
 
         await self._connection.commit()
 

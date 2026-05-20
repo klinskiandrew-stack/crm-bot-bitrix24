@@ -74,6 +74,9 @@ class Settings(BaseSettings):
     whisper_model: str = "small"
     whisper_compute_type: str = "int8"
     lead_recordings_dir: str = "/opt/crm-bot/data/lead_recordings"
+    # Google Sheet for transcribed leads. Empty = export disabled.
+    # Share the sheet with the service account as Editor.
+    lead_reports_sheet_id: str = ""
 
     # Which provider to use for LLM calls: "kie" or "deepseek"
     llm_provider: str = "kie"

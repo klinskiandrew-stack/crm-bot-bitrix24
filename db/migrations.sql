@@ -163,7 +163,8 @@ CREATE TABLE IF NOT EXISTS lead_reports (
     status               TEXT NOT NULL DEFAULT 'parsed',
     error                TEXT,
     created_at           TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    processed_at         TIMESTAMP
+    processed_at         TIMESTAMP,
+    exported_at          TIMESTAMP                  -- когда строка ушла в Google Sheet
 );
 CREATE INDEX IF NOT EXISTS idx_lead_reports_status ON lead_reports(status);
 CREATE INDEX IF NOT EXISTS idx_lead_reports_call_dt ON lead_reports(call_datetime);

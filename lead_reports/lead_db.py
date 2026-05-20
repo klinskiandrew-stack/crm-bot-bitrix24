@@ -114,3 +114,23 @@ async def mark_error(lead_id: int, error: str) -> None:
         ((error or "")[:500], lead_id),
     )
     await db.commit()
+
+
+async def get_exportable(limit: int = 500) -> List[Dict[str, Any]]:
+    """Transcribed leads not yet pushed to the Google Sheet."""
+    rows = await db.fetch_all(
+        "SELECT * FROM lead_reports "
+        "WHERE status IN ('transcribed', 'done') AND exported_at IS NULL "
+        "ORDER BY id ASC LIMIT ?",
+        (limit,),
+    )
+    return [dict(r) for r in rows]
+
+
+async def mark_exported(lead_id: int) -> None:
+    """Stamp a lead as exported so it isn't written to the Sheet twice."""
+    await db.execute(
+        "UPDATE lead_reports SET exported_at = CURRENT_TIMESTAMP WHERE id = ?",
+        (lead_id,),
+    )
+    await db.commit()
