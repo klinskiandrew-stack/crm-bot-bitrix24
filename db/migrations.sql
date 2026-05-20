@@ -164,7 +164,19 @@ CREATE TABLE IF NOT EXISTS lead_reports (
     error                TEXT,
     created_at           TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     processed_at         TIMESTAMP,
-    exported_at          TIMESTAMP                  -- когда строка ушла в Google Sheet
+    exported_at          TIMESTAMP,                 -- когда строка ушла в Google Sheet
+    -- Этап 4: сквозная связка с CRM Bitrix24 (по телефону клиента)
+    b24_lead_id          INTEGER,                   -- найденный лид
+    b24_deal_id          INTEGER,                   -- найденная сделка (если лид сконвертирован)
+    crm_outcome          TEXT,                      -- Квал / Неквал / В работе / Не найдено
+    crm_deal_stage       TEXT,                      -- текущая стадия сделки (название)
+    crm_deal_result      TEXT,                      -- Успешна / Провалена / В работе
+    crm_deal_amount      REAL,                      -- сумма сделки (OPPORTUNITY)
+    crm_had_measurement  TEXT,                      -- Был / Не было
+    crm_reason           TEXT,                      -- причина отказа (UF_CRM_1723465843)
+    crm_manager_comment  TEXT,                      -- поле «Комментарий» карточки лида
+    crm_card_url         TEXT,                      -- ссылка на карточку в Bitrix
+    crm_synced_at        TIMESTAMP                  -- когда последний раз обновляли из CRM
 );
 CREATE INDEX IF NOT EXISTS idx_lead_reports_status ON lead_reports(status);
 CREATE INDEX IF NOT EXISTS idx_lead_reports_call_dt ON lead_reports(call_datetime);

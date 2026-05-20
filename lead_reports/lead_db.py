@@ -122,6 +122,15 @@ async def get_by_id(lead_id: int) -> Dict[str, Any]:
     return dict(row) if row else {}
 
 
+async def get_all_done(limit: int = 5000) -> List[Dict[str, Any]]:
+    """Every fully processed lead — used to fully redraw the sheet."""
+    rows = await db.fetch_all(
+        "SELECT * FROM lead_reports WHERE status = 'done' ORDER BY id ASC LIMIT ?",
+        (limit,),
+    )
+    return [dict(r) for r in rows]
+
+
 async def get_pending_analysis(limit: int = 100) -> List[Dict[str, Any]]:
     """Transcribed leads still awaiting AI analysis."""
     rows = await db.fetch_all(
@@ -172,3 +181,43 @@ async def mark_exported(lead_id: int) -> None:
         (lead_id,),
     )
     await db.commit()
+
+
+# CRM cross-link columns updatable by the enricher (Stage 4).
+_CRM_FIELDS = (
+    "b24_lead_id", "b24_deal_id", "crm_outcome", "crm_deal_stage",
+    "crm_deal_result", "crm_deal_amount", "crm_had_measurement",
+    "crm_reason", "crm_manager_comment", "crm_card_url",
+)
+
+
+async def update_crm(lead_id: int, crm: Dict[str, Any]) -> None:
+    """Write CRM cross-link data + stamp crm_synced_at. Re-exports the row
+    by clearing exported_at so the sheet picks up the fresh values."""
+    cols = [f for f in _CRM_FIELDS if f in crm]
+    if not cols:
+        return
+    assignments = ", ".join(f"{c} = ?" for c in cols)
+    values = [crm[c] for c in cols]
+    values.append(lead_id)
+    await db.execute(
+        f"UPDATE lead_reports SET {assignments}, "
+        f"crm_synced_at = CURRENT_TIMESTAMP, exported_at = NULL WHERE id = ?",
+        tuple(values),
+    )
+    await db.commit()
+
+
+async def get_for_crm_sync(limit: int = 1000) -> List[Dict[str, Any]]:
+    """Leads whose CRM data should be (re)synced: never synced yet, or
+    synced but still 'live' (not a final outcome). Final = Неквал, or a
+    finished deal (Успешна/Провалена) — those no longer change."""
+    rows = await db.fetch_all(
+        "SELECT * FROM lead_reports WHERE status = 'done' AND ("
+        "  crm_synced_at IS NULL "
+        "  OR (crm_outcome NOT IN ('Неквал', 'Не найдено в CRM') "
+        "      AND (crm_deal_result IS NULL OR crm_deal_result = 'В работе'))"
+        ") ORDER BY id ASC LIMIT ?",
+        (limit,),
+    )
+    return [dict(r) for r in rows]

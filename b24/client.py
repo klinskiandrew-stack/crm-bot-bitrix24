@@ -467,6 +467,67 @@ class Bitrix24Client:
         result = response.get("result", [])
         return result if isinstance(result, list) else []
 
+    async def find_entity_by_phone(self, phone: str, entity_type: str = "LEAD") -> List[int]:
+        """Find lead/deal IDs by phone via crm.duplicate.findbycomm.
+
+        Handles phone-format quirks server-side (+7 / 8 / bare digits).
+        entity_type is 'LEAD' or 'DEAL'. Returns [] if nothing matches.
+        """
+        if not phone:
+            return []
+        resp = await self._call("crm.duplicate.findbycomm", {
+            "type": "PHONE",
+            "values": [str(phone)],
+            "entity_type": entity_type,
+        })
+        if isinstance(resp, dict) and "error" in resp:
+            return []
+        result = resp.get("result") or {}
+        ids = result.get(entity_type) or []
+        out = []
+        for i in ids:
+            try:
+                out.append(int(i))
+            except (TypeError, ValueError):
+                continue
+        return out
+
+    async def get_deals_by_lead(self, lead_id: int) -> List[Dict[str, Any]]:
+        """All deals converted from a given lead (crm.deal.list by LEAD_ID)."""
+        items, _total = await self._paginate(
+            "crm.deal.list",
+            {
+                "filter": {"LEAD_ID": lead_id},
+                "select": [
+                    "ID", "TITLE", "STAGE_ID", "STAGE_SEMANTIC_ID",
+                    "OPPORTUNITY", "CATEGORY_ID", "DATE_CREATE", "CLOSED",
+                ],
+            },
+            limit=20,
+            max_items=20,
+        )
+        if isinstance(items, dict) and "error" in items:
+            return []
+        return items
+
+    async def get_deal_passed_stages(self, deal_id: int) -> set:
+        """Set of STAGE_IDs the deal has passed through (crm.stagehistory.list).
+
+        Used to tell whether a deal ever reached a given stage even if it
+        has since moved on or fallen out.
+        """
+        resp = await self._call("crm.stagehistory.list", {
+            "entityTypeId": 2,
+            "filter": {"OWNER_ID": deal_id},
+            "select": ["STAGE_ID"],
+        })
+        if isinstance(resp, dict) and "error" in resp:
+            return set()
+        result = resp.get("result") or []
+        if isinstance(result, dict):
+            result = result.get("items", [])
+        return {r.get("STAGE_ID") for r in result if isinstance(r, dict) and r.get("STAGE_ID")}
+
     async def get_stage_history(
         self,
         stage_id: str,

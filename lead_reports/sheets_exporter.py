@@ -33,6 +33,14 @@ HEADERS = [
     "Потребность клиента (AI)",
     "Оценка менеджера (AI)",
     "Температура лида (AI)",
+    "Итог по лиду (CRM)",
+    "Стадия сделки (CRM)",
+    "Результат сделки (CRM)",
+    "Сумма сделки, ₽ (CRM)",
+    "Замер (CRM)",
+    "Причина отказа (CRM)",
+    "Комментарий менеджера (CRM)",
+    "Карточка Bitrix",
 ]
 
 _STATUS_RU = {
@@ -77,8 +85,19 @@ def _manager_score_cell(lead: Dict[str, Any]) -> str:
     return f"{score}/5 — {comment}".rstrip(" —")
 
 
+def _amount_cell(lead: Dict[str, Any]) -> str:
+    """Deal amount as a plain number string ('' if none)."""
+    amount = lead.get("crm_deal_amount")
+    if amount in (None, "", 0, 0.0):
+        return ""
+    try:
+        return f"{float(amount):.0f}"
+    except (TypeError, ValueError):
+        return ""
+
+
 def _lead_to_row(lead: Dict[str, Any]) -> List[str]:
-    """Map a lead_reports row to the 13 sheet columns."""
+    """Map a lead_reports row to the 21 sheet columns."""
     return [
         lead.get("call_datetime") or "",
         lead.get("company") or "",
@@ -93,6 +112,14 @@ def _lead_to_row(lead: Dict[str, Any]) -> List[str]:
         lead.get("ai_client_need") or "",
         _manager_score_cell(lead),
         lead.get("ai_lead_temp") or "",
+        lead.get("crm_outcome") or "",
+        lead.get("crm_deal_stage") or "",
+        lead.get("crm_deal_result") or "",
+        _amount_cell(lead),
+        lead.get("crm_had_measurement") or "",
+        lead.get("crm_reason") or "",
+        lead.get("crm_manager_comment") or "",
+        lead.get("crm_card_url") or "",
     ]
 
 
@@ -105,6 +132,40 @@ def _write_rows_sync(rows: List[List[str]]) -> None:
         ws.append_row(HEADERS, value_input_option="USER_ENTERED")
     # One API call for the whole batch.
     ws.append_rows(rows, value_input_option="USER_ENTERED")
+
+
+def _rebuild_sync(rows: List[List[str]]) -> None:
+    """Blocking — wipe the sheet and re-write header + all rows."""
+    sheet = _client().open_by_key(settings.lead_reports_sheet_id)
+    ws = sheet.sheet1
+    ws.clear()
+    ws.append_row(HEADERS, value_input_option="USER_ENTERED")
+    if rows:
+        ws.append_rows(rows, value_input_option="USER_ENTERED")
+
+
+async def rebuild_sheet() -> Dict[str, Any]:
+    """Full redraw — clear the sheet and re-write every 'done' lead.
+
+    Used by the daily CRM refresh: enrichment updates change existing
+    rows, and append-only export can't update in place, so the whole
+    sheet is redrawn (cheap at a few hundred rows).
+    """
+    if not is_enabled():
+        return {"rebuilt": 0, "skipped": True}
+
+    leads = await lead_db.get_all_done(limit=5000)
+    rows = [_lead_to_row(ld) for ld in leads]
+    try:
+        await asyncio.to_thread(_rebuild_sync, rows)
+    except Exception as e:
+        logger.error("Sheet rebuild failed", error=str(e), count=len(rows))
+        return {"rebuilt": 0, "error": str(e)}
+
+    for ld in leads:
+        await lead_db.mark_exported(ld["id"])
+    logger.info("Sheet rebuilt", count=len(leads))
+    return {"rebuilt": len(leads)}
 
 
 async def export_pending(limit: int = 500) -> Dict[str, Any]:

@@ -114,6 +114,16 @@ async def _send_monthly(bot: Bot) -> None:
             await b24._session.close()
 
 
+async def _run_crm_refresh() -> None:
+    """Daily lead_reports CRM refresh — re-sync live leads + redraw sheet."""
+    try:
+        from lead_reports.crm_sync import crm_refresh
+        result = await crm_refresh()
+        logger.info("CRM refresh job done", **result)
+    except Exception as e:
+        logger.error("CRM refresh job failed", error=str(e))
+
+
 def start_report_scheduler(bot: Bot) -> Optional[AsyncIOScheduler]:
     """Build and start the scheduler. Returns the instance (or None if disabled)."""
     if not settings.reports_enabled or not settings.reports_chat_id:
@@ -145,6 +155,14 @@ def start_report_scheduler(bot: Bot) -> Optional[AsyncIOScheduler]:
         CronTrigger(day=1, hour=hour, minute=minute, timezone=tz),
         args=[bot],
         id="monthly_report",
+        misfire_grace_time=3600,
+    )
+    # lead_reports CRM refresh — daily, a few minutes after the reports so
+    # the two don't contend. No-op if lead_reports isn't configured.
+    scheduler.add_job(
+        _run_crm_refresh,
+        CronTrigger(hour=hour, minute=5, timezone=tz),
+        id="crm_refresh",
         misfire_grace_time=3600,
     )
 

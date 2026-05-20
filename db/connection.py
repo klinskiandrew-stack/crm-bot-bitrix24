@@ -35,6 +35,21 @@ class Database:
         # Patch existing databases — add new columns idempotently
         await self._ensure_column("users", "allow_private", "INTEGER DEFAULT 1")
         await self._ensure_column("lead_reports", "exported_at", "TIMESTAMP")
+        # Stage 4 — CRM cross-link columns on lead_reports
+        for col, definition in (
+            ("b24_lead_id", "INTEGER"),
+            ("b24_deal_id", "INTEGER"),
+            ("crm_outcome", "TEXT"),
+            ("crm_deal_stage", "TEXT"),
+            ("crm_deal_result", "TEXT"),
+            ("crm_deal_amount", "REAL"),
+            ("crm_had_measurement", "TEXT"),
+            ("crm_reason", "TEXT"),
+            ("crm_manager_comment", "TEXT"),
+            ("crm_card_url", "TEXT"),
+            ("crm_synced_at", "TIMESTAMP"),
+        ):
+            await self._ensure_column("lead_reports", col, definition)
 
         await self._connection.commit()
 
