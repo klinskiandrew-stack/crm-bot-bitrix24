@@ -284,7 +284,8 @@ class Bitrix24Client:
             "UF_CRM_1723465843", "UF_CRM_1696239286",
         ]
         if include_full_utm:
-            select += ["UTM_CONTENT", "UTM_TERM"]
+            # Extra fields for the Excel export: ad creative/keyword + phone.
+            select += ["UTM_CONTENT", "UTM_TERM", "PHONE"]
         params = {
             "filter": {},
             "select": select,

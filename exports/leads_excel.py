@@ -35,6 +35,7 @@ _COLUMNS = [
     ("ID", "ID"),
     ("Дата создания", "_date"),
     ("Название лида", "TITLE"),
+    ("Телефон", "_phone"),
     ("Статус", "_status"),
     ("Источник (код)", "SOURCE_ID"),
     ("Источник (описание)", "SOURCE_DESCRIPTION"),
@@ -62,6 +63,25 @@ def _status_ru(lead: Dict[str, Any]) -> str:
     if semantic in _SEMANTIC_RU:
         return _SEMANTIC_RU[semantic]
     return status_id or "—"
+
+
+def _phone(lead: Dict[str, Any]) -> str:
+    """Phone number(s) from the Bitrix PHONE multifield.
+
+    PHONE is a list of {'VALUE': '+7...', 'VALUE_TYPE': 'MOBILE', ...};
+    several numbers are joined with '; '.
+    """
+    raw = lead.get("PHONE")
+    if not raw:
+        return ""
+    if isinstance(raw, list):
+        nums = [
+            str(p.get("VALUE", "")).strip()
+            for p in raw
+            if isinstance(p, dict) and p.get("VALUE")
+        ]
+        return "; ".join(n for n in nums if n)
+    return str(raw).strip()
 
 
 def _fmt_date(raw: Any) -> str:
@@ -102,6 +122,8 @@ def build_leads_xlsx(leads: List[Dict[str, Any]]) -> bytes:
                 row.append(_fmt_date(lead.get("DATE_CREATE")))
             elif key == "_status":
                 row.append(_status_ru(lead))
+            elif key == "_phone":
+                row.append(_phone(lead))
             else:
                 val = lead.get(key)
                 row.append("" if val is None else str(val))
