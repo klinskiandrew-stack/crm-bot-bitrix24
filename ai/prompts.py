@@ -211,7 +211,7 @@ def get_system_prompt(
 - Вопрос "найди компанию X" → СРАЗУ вызови search_contacts_or_companies, потом ответ
 
 ИСЧЕРПЫВАЮЩИЙ СПИСОК ИНСТРУМЕНТОВ (других НЕ существует):
-get_deals, get_deal_details, get_deal_full, get_leads, get_lead_full,
+get_deals, get_deal_details, get_deal_full, get_leads, get_lead_full, leads_summary,
 search_contacts_or_companies, get_pipeline_summary, get_user_activity_summary,
 get_recent_activities, count_deals_passed_stage, get_card_comments,
 analyze_junk_leads, analyze_junk_deals, export_leads_to_excel,
@@ -515,14 +515,32 @@ SOURCE_DESCRIPTION в карточке лида/сделки. UTM-метки —
   такие сделки идут в «реальные деньги». По умолчанию для финансовых отчётов
   используй only_completed=true если пользователь спрашивает «сколько заработали».
 
+================================================================
+ПОДСЧЁТ КОЛИЧЕСТВА ЛИДОВ — КРИТИЧНО ВАЖНО:
+================================================================
+
+get_leads НЕ ГОДИТСЯ для подсчёта «сколько лидов». Он отдаёт лишь
+ОГРАНИЧЕННУЮ СТРАНИЦУ строк (до 50), а не все. Если посчитать лиды по
+этой странице — ответ будет ЗАНИЖЕН в разы.
+
+- Вопрос «СКОЛЬКО было лидов», «% неквала», «конверсия в квал»,
+  «распределение по источникам / направлениям» → ВСЕГДА вызывай
+  leads_summary. Он возвращает ТОЧНЫЙ total и все разбивки за один вызов.
+- Если всё же используешь get_leads — смотри поле total_in_crm в ответе:
+  это РЕАЛЬНОЕ число лидов под фильтром. Поле count — лишь сколько строк
+  показано. Если есть truncated=true — НИКОГДА не называй count как итог,
+  бери total_in_crm, а лучше перезапроси через leads_summary.
+- Аналогично get_deals: total_in_crm — реальное число, count — показано.
+
 КОГДА КАКОЙ ИНСТРУМЕНТ для деталей карточки:
 - get_deal_full / get_lead_full — ВСЁ содержимое ОДНОЙ карточки (кастомные UF поля
   типа metrika_client_id, marquiz_ym_uid, ответы квиза, комментарии менеджеров).
   Используй ТОЛЬКО для одной-двух конкретных карточек по запросу пользователя.
-- get_deals / get_leads — массовые отчёты. Эти инструменты УЖЕ включают: SOURCE_ID,
-  SOURCE_DESCRIPTION, UTM_SOURCE, UTM_MEDIUM, UTM_CAMPAIGN, UTM_CONTENT, UTM_TERM.
-  Для вопросов «по каким источникам / UTM / каналам пришли сделки» — ОДНОГО вызова
-  get_deals (или get_leads) ДОСТАТОЧНО, НЕ нужно потом дёргать get_*_full для каждой.
+- get_deals / get_leads — выгрузка строк (детали по конкретным карточкам). Эти
+  инструменты УЖЕ включают: SOURCE_ID, SOURCE_DESCRIPTION, UTM_*, направление.
+  Но для ПОДСЧЁТА количества используй leads_summary (см. выше).
+- leads_summary — точные агрегаты по лидам (total, квал/неквал, источники,
+  направления). Главный инструмент для статистики по лидам.
 - get_card_comments — только заметки менеджеров без остальных полей.
 
 КРИТИЧНО: НИКОГДА не вызывай get_deal_full / get_lead_full / get_card_comments ПАЧКАМИ —

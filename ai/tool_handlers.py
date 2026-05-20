@@ -10,7 +10,7 @@ from metrika.client import metrika_client
 from sheets.lus_client import lus_client
 from sheets.pnl_client import pnl_client
 from avito.client import avito_client
-from exports.leads_excel import build_leads_xlsx
+from exports.leads_excel import build_leads_xlsx, LEAD_STATUS_RU
 from config import settings
 
 logger = structlog.get_logger()
@@ -161,6 +161,8 @@ class ToolHandlers:
                 return await self.analyze_junk_deals(tool_input, user_context)
             elif tool_name == "export_leads_to_excel":
                 return await self.export_leads_to_excel(tool_input, user_context)
+            elif tool_name == "leads_summary":
+                return await self.leads_summary(tool_input, user_context)
             elif tool_name == "metrika_traffic_summary":
                 return await self.metrika_traffic_summary(tool_input, user_context)
             elif tool_name == "metrika_traffic_by_source":
@@ -275,7 +277,7 @@ class ToolHandlers:
         if not b24_user_ids and not _sees_all_crm(user_context):
             return {"deals": [], "message": "No assigned users configured"}
 
-        deals = await client.get_deals(
+        result = await client.get_deals(
             assigned_by_ids=b24_user_ids,
             filter_by_stage=params.get("filter_by_stage"),
             filter_by_date_from=params.get("filter_by_date_from"),
@@ -284,31 +286,43 @@ class ToolHandlers:
             filter_by_title_contains=params.get("filter_by_title_contains"),
             filter_by_utm_source=params.get("filter_by_utm_source"),
             filter_by_direction_ids=params.get("filter_by_direction_ids"),
-            limit=min(params.get("limit", 20), 100)
+            limit=min(params.get("limit", 20), 100),
+            return_total=True,
         )
 
-        if isinstance(deals, dict) and "error" in deals:
-            return deals
+        if isinstance(result, dict) and "error" in result:
+            return result
+
+        deals = result.get("items", [])
+        total = result.get("total", len(deals))
 
         enriched = []
-        if isinstance(deals, list):
-            for d in deals[:50]:
-                d = dict(d)
-                d["card_url"] = client.deal_url(d.get("ID"))
-                # Resolve UF enum IDs to human-readable names so the LLM
-                # doesn't have to know magic numbers. Raw ID is kept too
-                # for filter round-trips.
-                d["direction"] = _resolve_direction(
-                    d.get("UF_CRM_651D2BA47419A"), DEAL_DIRECTIONS,
-                )
-                junk_reason_id = _safe_int(d.get("UF_CRM_67C71B6E2224F"))
-                d["junk_reason"] = DEAL_JUNK_REASONS.get(junk_reason_id, "") if junk_reason_id else ""
-                enriched.append(d)
+        for d in deals[:50]:
+            d = dict(d)
+            d["card_url"] = client.deal_url(d.get("ID"))
+            # Resolve UF enum IDs to human-readable names so the LLM
+            # doesn't have to know magic numbers. Raw ID is kept too
+            # for filter round-trips.
+            d["direction"] = _resolve_direction(
+                d.get("UF_CRM_651D2BA47419A"), DEAL_DIRECTIONS,
+            )
+            junk_reason_id = _safe_int(d.get("UF_CRM_67C71B6E2224F"))
+            d["junk_reason"] = DEAL_JUNK_REASONS.get(junk_reason_id, "") if junk_reason_id else ""
+            enriched.append(d)
 
-        return {
+        out = {
             "count": len(enriched),
+            "total_in_crm": total,
             "deals": enriched,
         }
+        if total > len(enriched):
+            out["truncated"] = True
+            out["note"] = (
+                f"Показаны {len(enriched)} сделок из {total} подходящих под фильтр. "
+                "НЕ называй количество показанных как итоговое — реальное число "
+                "сделок = total_in_crm. Для точных подсчётов используй get_pipeline_summary."
+            )
+        return out
 
     async def get_deal_details(self, params: Dict[str, Any], user_context: Dict[str, Any]) -> Dict[str, Any]:
         """Get deal details."""
@@ -341,7 +355,7 @@ class ToolHandlers:
         if err:
             return err
 
-        leads = await client.get_leads(
+        result = await client.get_leads(
             assigned_by_ids=b24_user_ids,
             filter_by_status=params.get("filter_by_status"),
             filter_by_date_from=params.get("filter_by_date_from"),
@@ -350,26 +364,134 @@ class ToolHandlers:
             filter_by_title_contains=params.get("filter_by_title_contains"),
             filter_by_utm_source=params.get("filter_by_utm_source"),
             filter_by_direction_ids=params.get("filter_by_direction_ids"),
-            limit=min(params.get("limit", 20), 100)
+            limit=min(params.get("limit", 20), 100),
+            return_total=True,
         )
 
-        if isinstance(leads, dict) and "error" in leads:
-            return leads
+        if isinstance(result, dict) and "error" in result:
+            return result
+
+        leads = result.get("items", [])
+        total = result.get("total", len(leads))
 
         enriched = []
-        if isinstance(leads, list):
-            for l in leads[:50]:
-                l = dict(l)
-                l["card_url"] = client.lead_url(l.get("ID"))
-                l["direction"] = _resolve_direction(
-                    l.get("UF_CRM_1696239286"), LEAD_DIRECTIONS,
-                )
-                enriched.append(l)
+        for l in leads[:50]:
+            l = dict(l)
+            l["card_url"] = client.lead_url(l.get("ID"))
+            l["direction"] = _resolve_direction(
+                l.get("UF_CRM_1696239286"), LEAD_DIRECTIONS,
+            )
+            enriched.append(l)
 
-        return {
+        out = {
             "count": len(enriched),
+            "total_in_crm": total,
             "leads": enriched,
         }
+        if total > len(enriched):
+            out["truncated"] = True
+            out["note"] = (
+                f"Показаны {len(enriched)} лидов из {total} подходящих под фильтр. "
+                "НЕ называй количество показанных как итоговое — реальное число "
+                "лидов = total_in_crm. Для подсчётов и распределений используй leads_summary."
+            )
+        return out
+
+    async def leads_summary(self, params: Dict[str, Any], user_context: Dict[str, Any]) -> Dict[str, Any]:
+        """Exact aggregate counts for leads — no per-row data.
+
+        The right tool for "сколько лидов", "% неквала", "распределение по
+        источникам/направлениям". get_leads only returns a capped page and
+        is useless for counting; this fetches every matching lead (light
+        select, paginated) and returns total + breakdowns. The LLM gets
+        ~20 lines of aggregates instead of hundreds of rows.
+        """
+        err = _validate_params(params, date_keys=("date_from", "date_to"), stage_key="not_used")
+        if err:
+            return err
+
+        b24_user_ids = user_context.get("b24_user_ids", [])
+        if not b24_user_ids and not _sees_all_crm(user_context):
+            return {"summary": {}, "message": "No assigned users configured"}
+
+        # High cap — a full year of Growzone leads is ~700. 5000 covers any
+        # realistic question; beyond that we flag the aggregate as partial.
+        HARD_CAP = 5000
+        client = await self._get_client()
+        result = await client.get_leads(
+            assigned_by_ids=b24_user_ids,
+            filter_by_status=params.get("filter_by_status"),
+            filter_by_date_from=params.get("date_from"),
+            filter_by_date_to=params.get("date_to"),
+            filter_by_source_ids=params.get("source_ids"),
+            filter_by_direction_ids=params.get("direction_ids"),
+            limit=HARD_CAP,
+            return_total=True,
+        )
+        if isinstance(result, dict) and "error" in result:
+            return result
+
+        leads = result.get("items", [])
+        total = result.get("total", len(leads))
+
+        # Quality split by STATUS_SEMANTIC_ID — robust to custom UC_* codes:
+        # S = converted (квал), F = junk (неквал), P/other = in progress.
+        qualified = junk = in_progress = 0
+        by_status: Dict[str, int] = {}
+        by_source: Dict[str, int] = {}
+        by_direction: Dict[str, int] = {}
+
+        for lead in leads:
+            semantic = (lead.get("STATUS_SEMANTIC_ID") or "").strip()
+            if semantic == "S":
+                qualified += 1
+            elif semantic == "F":
+                junk += 1
+            else:
+                in_progress += 1
+
+            status_id = (lead.get("STATUS_ID") or "—").strip() or "—"
+            status_label = LEAD_STATUS_RU.get(status_id, status_id)
+            by_status[status_label] = by_status.get(status_label, 0) + 1
+
+            src = (lead.get("SOURCE_ID") or "—").strip() or "—"
+            by_source[src] = by_source.get(src, 0) + 1
+
+            direction = _resolve_direction(lead.get("UF_CRM_1696239286"), LEAD_DIRECTIONS) or "—"
+            by_direction[direction] = by_direction.get(direction, 0) + 1
+
+        counted = len(leads)
+        denom = counted or 1
+
+        def _sorted(d: Dict[str, int]) -> Dict[str, int]:
+            return dict(sorted(d.items(), key=lambda kv: kv[1], reverse=True))
+
+        summary = {
+            "period": {"from": params.get("date_from"), "to": params.get("date_to")},
+            "filters": {
+                "status": params.get("filter_by_status"),
+                "source_ids": params.get("source_ids"),
+                "direction_ids": params.get("direction_ids"),
+            },
+            "total": total,
+            "quality": {
+                "qualified": qualified,
+                "junk": junk,
+                "in_progress": in_progress,
+                "qual_rate_pct": round(qualified / denom * 100, 1),
+                "junk_rate_pct": round(junk / denom * 100, 1),
+            },
+            "by_status": _sorted(by_status),
+            "by_source": _sorted(by_source),
+            "by_direction": _sorted(by_direction),
+        }
+        if total > counted:
+            summary["partial"] = True
+            summary["note"] = (
+                f"Точный total = {total}, но разбивки посчитаны по первым {counted} "
+                f"лидам (предел выборки {HARD_CAP}). Сузь период для точных разбивок."
+            )
+        return summary
 
     async def search_contacts_or_companies(self, params: Dict[str, Any], user_context: Dict[str, Any]) -> Dict[str, Any]:
         """Search contacts or companies."""

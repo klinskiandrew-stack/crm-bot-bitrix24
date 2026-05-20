@@ -111,21 +111,36 @@ class Bitrix24Client:
         params: Dict[str, Any] = None,
         limit: int = 50,
         max_items: int = 500
-    ) -> List[Dict[str, Any]]:
-        """Paginate using Bitrix24 'next' field. Page size is always 50."""
+    ):
+        """Paginate using Bitrix24 'next' field. Page size is always 50.
+
+        Returns a tuple (items, total) where `total` is Bitrix's count of
+        ALL records matching the filter — even when we stop early at
+        max_items. Callers that only need rows can ignore total; callers
+        doing analytics ("how many leads") need it so they don't report a
+        truncated page as the real number.
+
+        On error returns ({"error": ...}, 0) — callers already isinstance-
+        check the first element, so the shape stays compatible.
+        """
         all_items = []
         start = 0
+        total = 0
         PAGE_SIZE = 50
 
         while len(all_items) < max_items:
             response = await self._call(method, params, start=start)
 
             if isinstance(response, dict) and "error" in response:
-                return {"error": response["error"]}
+                return {"error": response["error"]}, 0
 
             batch = response.get("result", []) if isinstance(response, dict) else []
             if not isinstance(batch, list):
                 break
+
+            # Bitrix returns the full match count in `total` on every page.
+            if isinstance(response, dict) and response.get("total") is not None:
+                total = int(response.get("total") or 0)
 
             all_items.extend(batch)
 
@@ -134,7 +149,11 @@ class Bitrix24Client:
                 break
             start = next_start
 
-        return all_items[:max_items]
+        items = all_items[:max_items]
+        # If Bitrix didn't send total (rare), fall back to what we fetched.
+        if not total:
+            total = len(items)
+        return items, total
 
     async def get_deals(
         self,
@@ -147,8 +166,14 @@ class Bitrix24Client:
         filter_by_utm_source: Optional[str] = None,
         filter_by_direction_ids: Optional[List[int]] = None,
         limit: int = 50,
-    ) -> List[Dict[str, Any]]:
+        return_total: bool = False,
+    ):
         """Get deals for assigned users.
+
+        Returns a list of deals by default. With return_total=True returns
+        {"items": [...], "total": N} — N is Bitrix's count of ALL matching
+        deals, even if the page was capped at `limit`. Use it for analytics
+        so a truncated page isn't mistaken for the real number.
 
         Includes UTM fields by default so reports like 'deals by traffic
         source' don't need to fan out to get_deal_full per row.
@@ -192,7 +217,12 @@ class Bitrix24Client:
             # Bitrix accepts arrays for UF enum filter — matches any of given IDs.
             params["filter"]["UF_CRM_651D2BA47419A"] = filter_by_direction_ids
 
-        return await self._paginate("crm.deal.list", params, limit=limit, max_items=limit)
+        items, total = await self._paginate("crm.deal.list", params, limit=limit, max_items=limit)
+        if isinstance(items, dict) and "error" in items:
+            return items  # propagate error dict unchanged
+        if return_total:
+            return {"items": items, "total": total}
+        return items
 
     async def get_deal(self, deal_id: int) -> Dict[str, Any]:
         """Get single deal details. Uses GET because POST+JSON sometimes
@@ -214,8 +244,15 @@ class Bitrix24Client:
         filter_by_direction_ids: Optional[List[int]] = None,
         include_full_utm: bool = False,
         limit: int = 50,
-    ) -> List[Dict[str, Any]]:
+        return_total: bool = False,
+    ):
         """Get leads for assigned users.
+
+        Returns a list of leads by default. With return_total=True returns
+        {"items": [...], "total": N} — N is Bitrix's count of ALL matching
+        leads, even if the page was capped at `limit`. Analytics callers
+        ("how many leads from X") must use it so a truncated page isn't
+        reported as the real count.
 
         Lean select — only fields needed for typical reports. Removed
         DATE_MODIFY/LAST_NAME/COMPANY_TITLE/CURRENCY_ID/UTM_CONTENT/UTM_TERM
@@ -267,7 +304,12 @@ class Bitrix24Client:
         if filter_by_direction_ids:
             params["filter"]["UF_CRM_1696239286"] = filter_by_direction_ids
 
-        return await self._paginate("crm.lead.list", params, limit=limit, max_items=limit)
+        items, total = await self._paginate("crm.lead.list", params, limit=limit, max_items=limit)
+        if isinstance(items, dict) and "error" in items:
+            return items  # propagate error dict unchanged
+        if return_total:
+            return {"items": items, "total": total}
+        return items
 
     async def get_lead(self, lead_id: int) -> Dict[str, Any]:
         """Get single lead details. Uses GET — see get_deal note."""
@@ -295,7 +337,8 @@ class Bitrix24Client:
         if assigned_by_ids:
             params["filter"]["ASSIGNED_BY_ID"] = assigned_by_ids
 
-        return await self._paginate("crm.contact.list", params, limit=limit, max_items=limit)
+        items, _total = await self._paginate("crm.contact.list", params, limit=limit, max_items=limit)
+        return items
 
     async def get_contact(self, contact_id: int) -> Dict[str, Any]:
         """Get contact details."""
@@ -321,7 +364,8 @@ class Bitrix24Client:
         if assigned_by_ids:
             params["filter"]["ASSIGNED_BY_ID"] = assigned_by_ids
 
-        return await self._paginate("crm.company.list", params, limit=limit, max_items=limit)
+        items, _total = await self._paginate("crm.company.list", params, limit=limit, max_items=limit)
+        return items
 
     async def get_activities(
         self,
@@ -352,7 +396,8 @@ class Bitrix24Client:
         if date_to:
             params["filter"]["<CREATED"] = _day_after(date_to)
 
-        return await self._paginate("crm.activity.list", params, limit=limit, max_items=limit)
+        items, _total = await self._paginate("crm.activity.list", params, limit=limit, max_items=limit)
+        return items
 
     async def get_user(self, user_id: int) -> Dict[str, Any]:
         """Get user details."""
