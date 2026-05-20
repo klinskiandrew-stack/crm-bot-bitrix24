@@ -91,3 +91,26 @@ async def get_pending_transcription(limit: int = 50) -> List[Dict[str, Any]]:
         (limit,),
     )
     return [dict(r) for r in rows]
+
+
+async def update_transcription(
+    lead_id: int, recording_local_path: str, transcript: str
+) -> None:
+    """Store the downloaded recording path + transcript; status → transcribed."""
+    await db.execute(
+        "UPDATE lead_reports SET recording_local_path = ?, transcript = ?, "
+        "status = 'transcribed', processed_at = CURRENT_TIMESTAMP, error = NULL "
+        "WHERE id = ?",
+        (recording_local_path, transcript, lead_id),
+    )
+    await db.commit()
+
+
+async def mark_error(lead_id: int, error: str) -> None:
+    """Flag a report as failed (status='error') with the reason."""
+    await db.execute(
+        "UPDATE lead_reports SET status = 'error', error = ?, "
+        "processed_at = CURRENT_TIMESTAMP WHERE id = ?",
+        ((error or "")[:500], lead_id),
+    )
+    await db.commit()

@@ -69,6 +69,11 @@ class Settings(BaseSettings):
     telethon_api_id: int = 0
     telethon_api_hash: str = ""
     telethon_session_path: str = "/opt/crm-bot/secrets/telethon_lead_reports"
+    # Call transcription (faster-whisper, local). Model size trades RAM
+    # for quality: tiny ~75MB, base ~150MB, small ~500MB. int8 = CPU-friendly.
+    whisper_model: str = "small"
+    whisper_compute_type: str = "int8"
+    lead_recordings_dir: str = "/opt/crm-bot/data/lead_recordings"
 
     # Which provider to use for LLM calls: "kie" or "deepseek"
     llm_provider: str = "kie"

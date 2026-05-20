@@ -12,6 +12,7 @@ from telethon import events
 
 from config import settings
 from lead_reports.lead_db import save_report
+from lead_reports.pipeline import trigger_transcription_bg
 from lead_reports.report_parser import extract_urls, is_report, parse_report
 from lead_reports.telethon_client import build_telethon_client
 
@@ -72,6 +73,9 @@ class LeadReportsListener:
                     company=parsed.get("company"),
                     phone=parsed.get("phone"),
                 )
+                # Transcribe in the background — the STT lock serialises
+                # this with any other running batch, so no RAM clash.
+                trigger_transcription_bg()
         except Exception as e:
             logger.error(
                 "Failed to process lead report",

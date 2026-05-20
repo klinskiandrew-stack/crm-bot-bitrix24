@@ -255,3 +255,35 @@ async def leads_stats_command(message: types.Message, user_context: dict = None)
     except Exception as e:
         logger.error("Error getting leads stats", error=str(e))
         await message.answer(f"Ошибка: {str(e)}")
+
+
+@router.message(Command("transcribe_pending"))
+async def transcribe_pending_command(message: types.Message, user_context: dict = None):
+    """Transcribe all not-yet-processed lead recordings (backfill)."""
+    if not is_admin(user_context):
+        await message.answer("Доступ запрещен.")
+        return
+
+    import asyncio
+    from lead_reports.pipeline import transcribe_pending
+
+    await message.answer(
+        "🎧 Запускаю транскрибацию накопленных звонков в фоне.\n"
+        "Это может занять время (~1-3 мин на звонок). "
+        "Прогресс смотри через /leads_stats."
+    )
+
+    async def _run():
+        try:
+            res = await transcribe_pending(limit=200)
+            await message.answer(
+                f"✅ Транскрибация завершена.\n"
+                f"Обработано: {res['processed']}, "
+                f"успешно: {res['ok']}, ошибок: {res['failed']}"
+            )
+        except Exception as e:
+            logger.error("transcribe_pending command failed", error=str(e))
+            await message.answer(f"⚠️ Ошибка транскрибации: {e}")
+
+    asyncio.create_task(_run())
+    logger.info("Transcription backfill triggered", admin_id=user_context["telegram_id"])
