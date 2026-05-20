@@ -37,6 +37,10 @@ class Bitrix24Client:
         # In-memory cache for UF field name maps (refreshed every 24h).
         # Shape: {entity_type_id: {"map": {UF_CRM_X: "Имя"}, "expires": datetime}}
         self._uf_meta_cache: Dict[int, Dict[str, Any]] = {}
+        # In-memory cache for the Bitrix user directory (ID → name/position).
+        # Refreshed every 30 min — staff list changes rarely.
+        self._users_cache: Dict[int, Dict[str, str]] = {}
+        self._users_cache_ts: float = 0.0
 
     async def __aenter__(self):
         self._session = aiohttp.ClientSession()
@@ -408,6 +412,52 @@ class Bitrix24Client:
         if isinstance(result, list):
             return result[0] if result else {}
         return result or {}
+
+    async def get_users_map(self, ttl_seconds: int = 1800) -> Dict[int, Dict[str, str]]:
+        """Return {user_id: {"name": "Фамилия Имя", "position": "..."}}.
+
+        Used to turn raw ASSIGNED_BY_ID / RESPONSIBLE_ID numbers into
+        readable manager names. Cached in-memory for ttl_seconds — the
+        staff directory changes rarely, no need to hit the API per request.
+        """
+        import time
+        now = time.time()
+        if self._users_cache and (now - self._users_cache_ts) < ttl_seconds:
+            return self._users_cache
+
+        users: Dict[int, Dict[str, str]] = {}
+        start = 0
+        while True:
+            # No ACTIVE filter — fired managers must still resolve so old
+            # leads/deals assigned to them don't show a bare numeric id.
+            resp = await self._call("user.get", {}, start=start)
+            if isinstance(resp, dict) and "error" in resp:
+                break
+            batch = resp.get("result", []) if isinstance(resp, dict) else []
+            if not isinstance(batch, list) or not batch:
+                break
+            for u in batch:
+                try:
+                    uid = int(u.get("ID"))
+                except (TypeError, ValueError):
+                    continue
+                last = (u.get("LAST_NAME") or "").strip()
+                first = (u.get("NAME") or "").strip()
+                full = " ".join(p for p in (last, first) if p) or f"User {uid}"
+                users[uid] = {
+                    "name": full,
+                    "position": (u.get("WORK_POSITION") or "").strip(),
+                }
+            next_start = resp.get("next") if isinstance(resp, dict) else None
+            if next_start is None or len(batch) < 50:
+                break
+            start = next_start
+
+        if users:
+            self._users_cache = users
+            self._users_cache_ts = now
+        # On a failed refresh keep serving the stale cache rather than nothing.
+        return users or self._users_cache
 
     async def get_deal_stages(self) -> List[Dict[str, Any]]:
         """Get all deal stages across pipelines via crm.status.list."""

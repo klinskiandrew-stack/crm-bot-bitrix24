@@ -91,6 +91,54 @@ def _resolve_direction(raw: Any, mapping: Dict[int, str]) -> str:
     return mapping.get(key, f"#{key}")
 
 
+# Bitrix crm.activity TYPE_ID → Russian label.
+ACTIVITY_TYPE_RU: Dict[int, str] = {
+    1: "Встреча",
+    2: "Звонок",
+    3: "Задача",
+    4: "Письмо",
+    6: "Чат/мессенджер",
+}
+
+
+def _resolve_manager(uid: Any, users_map: Dict[int, Dict[str, str]]) -> str:
+    """ASSIGNED_BY_ID / RESPONSIBLE_ID → 'Фамилия Имя'. Falls back to
+    '#<id>' for unknown ids so the row is still identifiable."""
+    key = _safe_int(uid)
+    if not key:
+        return ""
+    info = users_map.get(key)
+    return info["name"] if info else f"#{key}"
+
+
+def _find_managers_by_name(name: str, users_map: Dict[int, Dict[str, str]]) -> List[tuple]:
+    """Substring (case-insensitive) match of a manager name → list of
+    (id, full_name). Used to turn 'Иванов' from the user's question into
+    a concrete ASSIGNED_BY_ID filter."""
+    q = (name or "").strip().lower()
+    if not q:
+        return []
+    matches = []
+    for uid, info in users_map.items():
+        if q in info.get("name", "").lower():
+            matches.append((uid, info["name"]))
+    return matches
+
+
+def _merge_assigned(b24_user_ids: List[int], manager_ids) -> List[int]:
+    """Combine the access scope (b24_user_ids) with a requested manager
+    filter. Empty scope = sees everyone, so the manager filter applies
+    directly. A scoped user can only ever see managers inside their
+    scope — hence the intersection. No overlap → [-1] (impossible id)
+    so the query returns nothing instead of leaking everyone."""
+    if not manager_ids:
+        return b24_user_ids
+    if not b24_user_ids:
+        return list(manager_ids)
+    overlap = [i for i in manager_ids if i in b24_user_ids]
+    return overlap or [-1]
+
+
 def _sees_all_crm(user_context: Dict[str, Any]) -> bool:
     """True if the user may read CRM data beyond their own b24_user_ids.
 
@@ -129,6 +177,32 @@ class ToolHandlers:
             self.b24_client = Bitrix24Client()
             await self.b24_client._ensure_session()
         return self.b24_client
+
+    async def _resolve_manager_filter(self, params: Dict[str, Any]):
+        """Turn the optional `manager_name` param into a list of manager IDs.
+
+        Returns (manager_ids, error_dict):
+        - (None, None)     — no manager_name given, nothing to filter
+        - ([id, ...], None) — resolved successfully
+        - (None, {error})  — not found or ambiguous; caller returns the error
+        """
+        name = params.get("manager_name")
+        if not name:
+            return None, None
+        client = await self._get_client()
+        users_map = await client.get_users_map()
+        matches = _find_managers_by_name(name, users_map)
+        if not matches:
+            return None, {"error": f"Менеджер «{name}» не найден в CRM. Проверьте имя."}
+        if len(matches) > 1:
+            listed = ", ".join(f"{n}" for _, n in matches)
+            return None, {
+                "error": (
+                    f"Под «{name}» подходит несколько сотрудников: {listed}. "
+                    "Уточните, кто именно нужен."
+                )
+            }
+        return [matches[0][0]], None
 
     async def handle_tool(self, tool_name: str, tool_input: Dict[str, Any], user_context: Dict[str, Any]) -> Dict[str, Any]:
         """Route to appropriate tool handler."""
@@ -233,6 +307,7 @@ class ToolHandlers:
         # Fetch deal details (TITLE, STAGE_ID, OPPORTUNITY, etc.) for the unique IDs
         # so Claude doesn't need a follow-up call to render cards.
         deal_ids = result.get("unique_deal_ids", [])[:50]  # cap to avoid huge payloads
+        users_map = await client.get_users_map()
         deals_brief = []
         for deal_id in deal_ids:
             try:
@@ -245,6 +320,7 @@ class ToolHandlers:
                         "OPPORTUNITY": deal.get("OPPORTUNITY"),
                         "CURRENCY_ID": deal.get("CURRENCY_ID"),
                         "ASSIGNED_BY_ID": deal.get("ASSIGNED_BY_ID"),
+                        "manager": _resolve_manager(deal.get("ASSIGNED_BY_ID"), users_map),
                         "card_url": client.deal_url(deal_id),
                     })
             except Exception as e:
@@ -277,8 +353,12 @@ class ToolHandlers:
         if not b24_user_ids and not _sees_all_crm(user_context):
             return {"deals": [], "message": "No assigned users configured"}
 
+        manager_ids, mgr_err = await self._resolve_manager_filter(params)
+        if mgr_err:
+            return mgr_err
+
         result = await client.get_deals(
-            assigned_by_ids=b24_user_ids,
+            assigned_by_ids=_merge_assigned(b24_user_ids, manager_ids),
             filter_by_stage=params.get("filter_by_stage"),
             filter_by_date_from=params.get("filter_by_date_from"),
             filter_by_date_to=params.get("filter_by_date_to"),
@@ -296,6 +376,7 @@ class ToolHandlers:
         deals = result.get("items", [])
         total = result.get("total", len(deals))
 
+        users_map = await client.get_users_map()
         enriched = []
         for d in deals[:50]:
             d = dict(d)
@@ -308,6 +389,7 @@ class ToolHandlers:
             )
             junk_reason_id = _safe_int(d.get("UF_CRM_67C71B6E2224F"))
             d["junk_reason"] = DEAL_JUNK_REASONS.get(junk_reason_id, "") if junk_reason_id else ""
+            d["manager"] = _resolve_manager(d.get("ASSIGNED_BY_ID"), users_map)
             enriched.append(d)
 
         out = {
@@ -355,8 +437,12 @@ class ToolHandlers:
         if err:
             return err
 
+        manager_ids, mgr_err = await self._resolve_manager_filter(params)
+        if mgr_err:
+            return mgr_err
+
         result = await client.get_leads(
-            assigned_by_ids=b24_user_ids,
+            assigned_by_ids=_merge_assigned(b24_user_ids, manager_ids),
             filter_by_status=params.get("filter_by_status"),
             filter_by_date_from=params.get("filter_by_date_from"),
             filter_by_date_to=params.get("filter_by_date_to"),
@@ -374,6 +460,7 @@ class ToolHandlers:
         leads = result.get("items", [])
         total = result.get("total", len(leads))
 
+        users_map = await client.get_users_map()
         enriched = []
         for l in leads[:50]:
             l = dict(l)
@@ -381,6 +468,7 @@ class ToolHandlers:
             l["direction"] = _resolve_direction(
                 l.get("UF_CRM_1696239286"), LEAD_DIRECTIONS,
             )
+            l["manager"] = _resolve_manager(l.get("ASSIGNED_BY_ID"), users_map)
             enriched.append(l)
 
         out = {
@@ -414,12 +502,16 @@ class ToolHandlers:
         if not b24_user_ids and not _sees_all_crm(user_context):
             return {"summary": {}, "message": "No assigned users configured"}
 
+        manager_ids, mgr_err = await self._resolve_manager_filter(params)
+        if mgr_err:
+            return mgr_err
+
         # High cap — a full year of Growzone leads is ~700. 5000 covers any
         # realistic question; beyond that we flag the aggregate as partial.
         HARD_CAP = 5000
         client = await self._get_client()
         result = await client.get_leads(
-            assigned_by_ids=b24_user_ids,
+            assigned_by_ids=_merge_assigned(b24_user_ids, manager_ids),
             filter_by_status=params.get("filter_by_status"),
             filter_by_date_from=params.get("date_from"),
             filter_by_date_to=params.get("date_to"),
@@ -433,6 +525,7 @@ class ToolHandlers:
 
         leads = result.get("items", [])
         total = result.get("total", len(leads))
+        users_map = await client.get_users_map()
 
         # Quality split by STATUS_SEMANTIC_ID — robust to custom UC_* codes:
         # S = converted (квал), F = junk (неквал), P/other = in progress.
@@ -440,6 +533,7 @@ class ToolHandlers:
         by_status: Dict[str, int] = {}
         by_source: Dict[str, int] = {}
         by_direction: Dict[str, int] = {}
+        by_manager: Dict[str, int] = {}
 
         for lead in leads:
             semantic = (lead.get("STATUS_SEMANTIC_ID") or "").strip()
@@ -460,6 +554,9 @@ class ToolHandlers:
             direction = _resolve_direction(lead.get("UF_CRM_1696239286"), LEAD_DIRECTIONS) or "—"
             by_direction[direction] = by_direction.get(direction, 0) + 1
 
+            manager = _resolve_manager(lead.get("ASSIGNED_BY_ID"), users_map) or "—"
+            by_manager[manager] = by_manager.get(manager, 0) + 1
+
         counted = len(leads)
         denom = counted or 1
 
@@ -472,6 +569,7 @@ class ToolHandlers:
                 "status": params.get("filter_by_status"),
                 "source_ids": params.get("source_ids"),
                 "direction_ids": params.get("direction_ids"),
+                "manager_name": params.get("manager_name"),
             },
             "total": total,
             "quality": {
@@ -484,6 +582,7 @@ class ToolHandlers:
             "by_status": _sorted(by_status),
             "by_source": _sorted(by_source),
             "by_direction": _sorted(by_direction),
+            "by_manager": _sorted(by_manager),
         }
         if total > counted:
             summary["partial"] = True
@@ -581,50 +680,88 @@ class ToolHandlers:
         }
 
     async def get_user_activity_summary(self, params: Dict[str, Any], user_context: Dict[str, Any]) -> Dict[str, Any]:
-        """Get user activity summary."""
+        """Per-manager activity breakdown for a period.
+
+        Built for the РОП use case "как сегодня работают менеджеры": for
+        each manager — new deals + activities split into звонки / встречи /
+        задачи. Names are resolved from the user directory, never raw IDs.
+        """
         client = await self._get_client()
         b24_user_ids = user_context.get("b24_user_ids", [])
 
         if not b24_user_ids and not _sees_all_crm(user_context):
-            return {"summary": {}, "message": "No assigned users configured"}
+            return {"managers": [], "message": "No assigned users configured"}
+
+        manager_ids, mgr_err = await self._resolve_manager_filter(params)
+        if mgr_err:
+            return mgr_err
+        assigned = _merge_assigned(b24_user_ids, manager_ids)
 
         date_from = params.get("date_from")
         date_to = params.get("date_to")
 
-        # Get deals created in period
         new_deals = await client.get_deals(
-            assigned_by_ids=b24_user_ids,
+            assigned_by_ids=assigned,
             filter_by_date_from=date_from,
             filter_by_date_to=date_to,
-            limit=500
+            limit=500,
         )
-
-        # Get activities
         activities = await client.get_activities(
-            assigned_by_ids=b24_user_ids,
+            assigned_by_ids=assigned,
             date_from=date_from,
             date_to=date_to,
-            limit=500
+            limit=500,
+        )
+        if isinstance(new_deals, dict) and "error" in new_deals:
+            return new_deals
+        if isinstance(activities, dict) and "error" in activities:
+            return activities
+        new_deals = new_deals if isinstance(new_deals, list) else []
+        activities = activities if isinstance(activities, list) else []
+
+        users_map = await client.get_users_map()
+
+        # Aggregate per manager id.
+        stats: Dict[int, Dict[str, Any]] = {}
+
+        def _slot(uid: int) -> Dict[str, Any]:
+            return stats.setdefault(uid, {
+                "manager": _resolve_manager(uid, users_map),
+                "new_deals": 0,
+                "activities": 0,
+                "Звонок": 0, "Встреча": 0, "Задача": 0,
+                "Письмо": 0, "Чат/мессенджер": 0, "Прочее": 0,
+            })
+
+        for d in new_deals:
+            uid = _safe_int(d.get("ASSIGNED_BY_ID"))
+            if uid:
+                _slot(uid)["new_deals"] += 1
+
+        for a in activities:
+            uid = _safe_int(a.get("RESPONSIBLE_ID"))
+            if not uid:
+                continue
+            slot = _slot(uid)
+            slot["activities"] += 1
+            type_label = ACTIVITY_TYPE_RU.get(_safe_int(a.get("TYPE_ID")), "Прочее")
+            slot[type_label] = slot.get(type_label, 0) + 1
+
+        # Sort by overall workload (deals + activities), busiest first.
+        managers = sorted(
+            stats.values(),
+            key=lambda m: m["new_deals"] + m["activities"],
+            reverse=True,
         )
 
-        new_deals_count = len(new_deals) if isinstance(new_deals, list) else 0
-        activities_count = len(activities) if isinstance(activities, list) else 0
-
-        # Count activity types
-        activity_types = {}
-        if isinstance(activities, list):
-            for activity in activities:
-                atype = activity.get("TYPE_ID", "UNKNOWN")
-                activity_types[atype] = activity_types.get(atype, 0) + 1
-
         return {
-            "new_deals": new_deals_count,
-            "activities_count": activities_count,
-            "activity_types": activity_types,
-            "period": {
-                "from": date_from or "Not specified",
-                "to": date_to or "Not specified"
-            }
+            "period": {"from": date_from or "не указан", "to": date_to or "не указан"},
+            "managers": managers,
+            "totals": {
+                "new_deals": len(new_deals),
+                "activities": len(activities),
+                "managers_active": len(managers),
+            },
         }
 
     async def get_recent_activities(self, params: Dict[str, Any], user_context: Dict[str, Any]) -> Dict[str, Any]:
@@ -638,8 +775,12 @@ class ToolHandlers:
         days_back = params.get("days_back", 7)
         date_from = (datetime.utcnow() - timedelta(days=days_back)).isoformat()
 
+        manager_ids, mgr_err = await self._resolve_manager_filter(params)
+        if mgr_err:
+            return mgr_err
+
         activities = await client.get_activities(
-            assigned_by_ids=b24_user_ids,
+            assigned_by_ids=_merge_assigned(b24_user_ids, manager_ids),
             date_from=date_from,
             limit=params.get("limit", 20)
         )
@@ -647,9 +788,18 @@ class ToolHandlers:
         if isinstance(activities, dict) and "error" in activities:
             return activities
 
+        activities = activities if isinstance(activities, list) else []
+        users_map = await client.get_users_map()
+        enriched = []
+        for a in activities[:20]:
+            a = dict(a)
+            a["responsible"] = _resolve_manager(a.get("RESPONSIBLE_ID"), users_map)
+            a["type"] = ACTIVITY_TYPE_RU.get(_safe_int(a.get("TYPE_ID")), "Прочее")
+            enriched.append(a)
+
         return {
-            "count": len(activities) if isinstance(activities, list) else 0,
-            "activities": activities[:20] if isinstance(activities, list) else [],
+            "count": len(activities),
+            "activities": enriched,
             "period_days": days_back
         }
 
