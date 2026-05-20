@@ -134,3 +134,36 @@ CREATE TABLE IF NOT EXISTS scheduled_meetings (
     created_at         TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_scheduled_meetings_reminder ON scheduled_meetings(start_at, reminder_sent_at);
+
+-- Лиды из чата «sphere ИТМ» (бот Amely постит «Онлайн отчётность»).
+-- Собираются Telethon-listener'ом модуля lead_reports.
+-- status: parsed → transcribed → done | error.
+CREATE TABLE IF NOT EXISTS lead_reports (
+    id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+    message_id           INTEGER NOT NULL UNIQUE,   -- дедуп по id сообщения чата
+    chat_id              INTEGER,
+    call_datetime        TEXT,                      -- '2026-05-20 15:36:00' (МСК)
+    inn                  TEXT,
+    company              TEXT,
+    phone                TEXT,
+    position             TEXT,
+    fio                  TEXT,
+    lpr_phone            TEXT,
+    email                TEXT,
+    city                 TEXT,
+    comment              TEXT,
+    recording_url        TEXT,
+    recording_local_path TEXT,                      -- Этап 2: скачанный MP3
+    transcript           TEXT,                      -- Этап 2: STT
+    ai_summary           TEXT,                      -- Этап 3: LLM-анализ
+    ai_client_need       TEXT,
+    ai_manager_score     INTEGER,
+    ai_manager_comment   TEXT,
+    ai_lead_temp         TEXT,                      -- горячий/тёплый/холодный
+    status               TEXT NOT NULL DEFAULT 'parsed',
+    error                TEXT,
+    created_at           TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    processed_at         TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_lead_reports_status ON lead_reports(status);
+CREATE INDEX IF NOT EXISTS idx_lead_reports_call_dt ON lead_reports(call_datetime);

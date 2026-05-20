@@ -60,6 +60,16 @@ class Settings(BaseSettings):
     reports_daily_hour: int = 9
     reports_daily_minute: int = 0
 
+    # Lead reports module (collects lead reports from the sphere ИТМ chat
+    # via Telethon, transcribes calls, stores them). Toggle off to disable.
+    lead_reports_enabled: bool = False
+    lead_reports_chat_id: int = 0          # basic group id, e.g. -4151474068
+    # Telethon (User API). api_id/api_hash from my.telegram.org — set in .env.
+    # The session file holds the actual authorisation; never commit it.
+    telethon_api_id: int = 0
+    telethon_api_hash: str = ""
+    telethon_session_path: str = "/opt/crm-bot/secrets/telethon_lead_reports"
+
     # Which provider to use for LLM calls: "kie" or "deepseek"
     llm_provider: str = "kie"
 

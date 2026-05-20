@@ -9,6 +9,7 @@ from bot.utils import get_proxy_config
 from reports.scheduler import start_report_scheduler
 from meetings.scheduler import start_meetings_scheduler
 from dashboard.app import start_dashboard_server, stop_dashboard_server
+from lead_reports.listener import start_lead_reports_listener
 import os
 import structlog
 
@@ -69,6 +70,10 @@ async def main():
         except Exception as e:
             logger.error("Failed to start dashboard server", error=str(e))
 
+    # Lead reports listener — Telethon watcher on the sphere ИТМ chat.
+    # Disabled unless LEAD_REPORTS_ENABLED=true; failure never blocks the bot.
+    lead_listener = await start_lead_reports_listener()
+
     try:
         logger.info("Starting bot polling")
         await dp.start_polling(bot)
@@ -81,6 +86,8 @@ async def main():
             meetings_scheduler.shutdown(wait=False)
         if dashboard_runner and dashboard_scheduler:
             await stop_dashboard_server(dashboard_runner, dashboard_scheduler)
+        if lead_listener:
+            await lead_listener.stop()
         await db.close()
         await bot.session.close()
         logger.info("Bot shutdown")

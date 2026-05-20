@@ -38,3 +38,7 @@ htmlcov/
 *.swo
 *~
 backup_*.db
+secrets/
+*.session
+*.session-journal
+.claude/

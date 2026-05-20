@@ -196,3 +196,62 @@ async def errors_command(message: types.Message, user_context: dict = None):
     except Exception as e:
         logger.error("Error getting errors", error=str(e))
         await message.answer(f"Ошибка: {str(e)}")
+
+
+@router.message(Command("leads"))
+async def leads_command(message: types.Message, user_context: dict = None):
+    """Show the most recent collected lead reports (sphere ИТМ chat)."""
+    if not is_admin(user_context):
+        await message.answer("Доступ запрещен.")
+        return
+
+    from lead_reports.lead_db import get_recent
+
+    try:
+        leads = await get_recent(limit=10)
+        if not leads:
+            await message.answer("📭 Лидов пока не собрано.")
+            return
+
+        lines = ["📋 ПОСЛЕДНИЕ ЛИДЫ (sphere ИТМ)\n"]
+        for ld in leads:
+            comment = (ld.get("comment") or "").replace("\n", " ")
+            if len(comment) > 90:
+                comment = comment[:90] + "…"
+            lines.append(
+                f"• {ld.get('call_datetime') or '—'} | "
+                f"{ld.get('company') or '—'} | {ld.get('phone') or '—'}\n"
+                f"  {ld.get('fio') or '—'} · {comment or '—'}"
+            )
+        await message.answer("\n".join(lines))
+        logger.info("Leads shown", admin_id=user_context["telegram_id"])
+    except Exception as e:
+        logger.error("Error getting leads", error=str(e))
+        await message.answer(f"Ошибка: {str(e)}")
+
+
+@router.message(Command("leads_stats"))
+async def leads_stats_command(message: types.Message, user_context: dict = None):
+    """Show aggregate stats for collected lead reports."""
+    if not is_admin(user_context):
+        await message.answer("Доступ запрещен.")
+        return
+
+    from lead_reports.lead_db import get_stats
+
+    try:
+        stats = await get_stats()
+        by_status = stats.get("by_status", {})
+        status_lines = "\n".join(
+            f"  • {k}: {v}" for k, v in by_status.items()
+        ) or "  —"
+        await message.answer(
+            "📊 СТАТИСТИКА ЛИДОВ (sphere ИТМ)\n\n"
+            f"Всего собрано: {stats.get('total', 0)}\n"
+            f"По статусам:\n{status_lines}\n\n"
+            f"Последний звонок: {stats.get('last_call_datetime') or '—'}"
+        )
+        logger.info("Leads stats shown", admin_id=user_context["telegram_id"])
+    except Exception as e:
+        logger.error("Error getting leads stats", error=str(e))
+        await message.answer(f"Ошибка: {str(e)}")
