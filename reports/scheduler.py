@@ -133,6 +133,18 @@ async def _run_error_digest(bot: Bot) -> None:
         logger.error("Error digest job failed", error=str(e))
 
 
+async def _run_lead_retry() -> None:
+    """Hourly retry of pending lead recordings — telephony publishes the
+    MP3 with a delay, so a fresh call's recording 404s at first."""
+    try:
+        from lead_reports.pipeline import transcribe_pending
+        result = await transcribe_pending(limit=200)
+        if result.get("processed"):
+            logger.info("Hourly lead retry done", **result)
+    except Exception as e:
+        logger.error("Hourly lead retry failed", error=str(e))
+
+
 def start_report_scheduler(bot: Bot) -> Optional[AsyncIOScheduler]:
     """Build and start the scheduler. Returns the instance (or None if disabled)."""
     if not settings.reports_enabled or not settings.reports_chat_id:
@@ -181,6 +193,14 @@ def start_report_scheduler(bot: Bot) -> Optional[AsyncIOScheduler]:
         args=[bot],
         id="error_digest",
         misfire_grace_time=3600,
+    )
+    # Hourly retry for pending lead recordings (telephony publishes the
+    # MP3 with a delay — a fresh call 404s on the first attempt).
+    scheduler.add_job(
+        _run_lead_retry,
+        CronTrigger(minute=35, timezone=tz),
+        id="lead_retry",
+        misfire_grace_time=1800,
     )
 
     scheduler.start()

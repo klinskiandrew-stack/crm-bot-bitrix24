@@ -45,6 +45,21 @@ async def download_recording(url: str, dest_dir: str) -> str:
     return dest
 
 
+def _lead_older_than_24h(lead: Dict[str, Any]) -> bool:
+    """True if the lead row was created more than 24h ago — used to stop
+    retrying a recording that's never going to appear."""
+    from datetime import datetime, timedelta
+
+    raw = lead.get("created_at")
+    if not raw:
+        return False
+    try:
+        created = datetime.fromisoformat(str(raw).replace("T", " ").split("+")[0])
+    except ValueError:
+        return False
+    return datetime.utcnow() - created > timedelta(hours=24)
+
+
 async def process_lead(lead: Dict[str, Any]) -> bool:
     """Download + transcribe one lead's recording, update the DB.
 
@@ -60,7 +75,19 @@ async def process_lead(lead: Dict[str, Any]) -> bool:
     try:
         local_path = await download_recording(url, settings.lead_recordings_dir)
     except Exception as e:
-        logger.error("Recording download failed", lead_id=lead_id, error=str(e))
+        msg = str(e)
+        # The telephony recording (lk.ccp.center) is published with a
+        # delay — right after the call it 404s. Don't fail the lead:
+        # leave it 'parsed' so the hourly retry picks it up later. Only
+        # give up if it's been stuck >24h (then the file is truly gone).
+        if "404" in msg or "Not Found" in msg:
+            if _lead_older_than_24h(lead):
+                await lead_db.mark_error(lead_id, f"Запись недоступна более суток: {msg}")
+                logger.warning("Recording still 404 after 24h — giving up", lead_id=lead_id)
+            else:
+                logger.info("Recording not ready yet (404) — will retry", lead_id=lead_id)
+            return False
+        logger.error("Recording download failed", lead_id=lead_id, error=msg)
         await lead_db.mark_error(lead_id, f"Скачивание не удалось: {e}")
         return False
 
