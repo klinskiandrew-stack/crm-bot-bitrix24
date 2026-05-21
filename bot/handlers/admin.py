@@ -257,6 +257,22 @@ async def leads_stats_command(message: types.Message, user_context: dict = None)
         await message.answer(f"Ошибка: {str(e)}")
 
 
+@router.message(Command("debug"))
+async def debug_command(message: types.Message, user_context: dict = None):
+    """On-demand failure digest for the last 24h."""
+    if not is_admin(user_context):
+        await message.answer("Доступ запрещен.")
+        return
+    from reports.error_digest import build_error_digest
+    try:
+        text = await build_error_digest(hours=24)
+        await message.answer(text, parse_mode=ParseMode.HTML)
+        logger.info("Debug digest shown", admin_id=user_context["telegram_id"])
+    except Exception as e:
+        logger.error("Debug digest failed", error=str(e))
+        await message.answer(f"Ошибка: {e}")
+
+
 @router.message(Command("transcribe_pending"))
 async def transcribe_pending_command(message: types.Message, user_context: dict = None):
     """Transcribe all not-yet-processed lead recordings (backfill)."""

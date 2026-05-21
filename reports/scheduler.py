@@ -124,6 +124,15 @@ async def _run_crm_refresh() -> None:
         logger.error("CRM refresh job failed", error=str(e))
 
 
+async def _run_error_digest(bot: Bot) -> None:
+    """Daily self-monitoring digest of bot failures, sent to the admin."""
+    try:
+        from reports.error_digest import send_error_digest
+        await send_error_digest(bot, hours=24)
+    except Exception as e:
+        logger.error("Error digest job failed", error=str(e))
+
+
 def start_report_scheduler(bot: Bot) -> Optional[AsyncIOScheduler]:
     """Build and start the scheduler. Returns the instance (or None if disabled)."""
     if not settings.reports_enabled or not settings.reports_chat_id:
@@ -163,6 +172,14 @@ def start_report_scheduler(bot: Bot) -> Optional[AsyncIOScheduler]:
         _run_crm_refresh,
         CronTrigger(hour=hour, minute=5, timezone=tz),
         id="crm_refresh",
+        misfire_grace_time=3600,
+    )
+    # Daily self-monitoring digest of bot failures → admin.
+    scheduler.add_job(
+        _run_error_digest,
+        CronTrigger(hour=hour, minute=10, timezone=tz),
+        args=[bot],
+        id="error_digest",
         misfire_grace_time=3600,
     )
 
