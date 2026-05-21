@@ -237,6 +237,8 @@ class ToolHandlers:
                 return await self.export_leads_to_excel(tool_input, user_context)
             elif tool_name == "leads_summary":
                 return await self.leads_summary(tool_input, user_context)
+            elif tool_name == "deals_summary":
+                return await self.deals_summary(tool_input, user_context)
             elif tool_name == "metrika_traffic_summary":
                 return await self.metrika_traffic_summary(tool_input, user_context)
             elif tool_name == "metrika_traffic_by_source":
@@ -313,6 +315,7 @@ class ToolHandlers:
             try:
                 deal = await client.get_deal(deal_id)
                 if isinstance(deal, dict) and deal.get("ID"):
+                    date_create = deal.get("DATE_CREATE") or ""
                     deals_brief.append({
                         "ID": deal["ID"],
                         "TITLE": deal.get("TITLE", f"Сделка #{deal_id}"),
@@ -321,6 +324,11 @@ class ToolHandlers:
                         "CURRENCY_ID": deal.get("CURRENCY_ID"),
                         "ASSIGNED_BY_ID": deal.get("ASSIGNED_BY_ID"),
                         "manager": _resolve_manager(deal.get("ASSIGNED_BY_ID"), users_map),
+                        # Дата и год создания сделки — чтобы вопросы «год
+                        # обращения / в каком году создана» не требовали
+                        # отдельного get_deal_details по каждой сделке.
+                        "DATE_CREATE": date_create,
+                        "year_created": date_create[:4] if date_create else "",
                         "card_url": client.deal_url(deal_id),
                     })
             except Exception as e:
@@ -337,7 +345,9 @@ class ToolHandlers:
             "note": (
                 "В deals — все уникальные сделки, побывавшие на стадии за период. "
                 "current_STAGE_ID показывает где они находятся СЕЙЧАС "
-                "(может отличаться от запрошенной стадии)."
+                "(может отличаться от запрошенной стадии). "
+                "DATE_CREATE / year_created — когда сделка создана; для вопросов "
+                "про «год обращения» бери год отсюда, НЕ вызывай get_deal_details."
             ),
         }
 
@@ -589,6 +599,143 @@ class ToolHandlers:
             summary["note"] = (
                 f"Точный total = {total}, но разбивки посчитаны по первым {counted} "
                 f"лидам (предел выборки {HARD_CAP}). Сузь период для точных разбивок."
+            )
+        return summary
+
+    async def deals_summary(self, params: Dict[str, Any], user_context: Dict[str, Any]) -> Dict[str, Any]:
+        """Exact aggregate counts for deals — no per-row data.
+
+        The deal-side counterpart of leads_summary: for questions about
+        sales/deals by channel, stage or result. One call returns total,
+        the won/lost split with money, and breakdowns by source / stage /
+        direction / manager — never call it once per channel.
+        """
+        err = _validate_params(params, date_keys=("date_from", "date_to"), stage_key="not_used")
+        if err:
+            return err
+
+        b24_user_ids = user_context.get("b24_user_ids", [])
+        if not b24_user_ids and not _sees_all_crm(user_context):
+            return {"summary": {}, "message": "No assigned users configured"}
+
+        manager_ids, mgr_err = await self._resolve_manager_filter(params)
+        if mgr_err:
+            return mgr_err
+
+        from lead_reports.crm_enricher import CONTRACT_STAGES, DEAL_STAGES
+
+        HARD_CAP = 5000
+        client = await self._get_client()
+        result = await client.get_deals(
+            assigned_by_ids=_merge_assigned(b24_user_ids, manager_ids),
+            filter_by_date_from=params.get("date_from"),
+            filter_by_date_to=params.get("date_to"),
+            filter_by_source_ids=params.get("source_ids"),
+            filter_by_direction_ids=params.get("direction_ids"),
+            limit=HARD_CAP,
+            return_total=True,
+        )
+        if isinstance(result, dict) and "error" in result:
+            return result
+
+        deals = result.get("items", [])
+        total = result.get("total", len(deals))
+        users_map = await client.get_users_map()
+
+        won = lost = in_progress = 0
+        won_amount = total_amount = 0.0
+        by_source: Dict[str, int] = {}
+        by_stage: Dict[str, int] = {}
+        by_result: Dict[str, int] = {}
+        by_direction: Dict[str, int] = {}
+        by_manager: Dict[str, int] = {}
+        # Sales (won deals) per channel — count + money.
+        sales_by_source: Dict[str, Dict[str, float]] = {}
+
+        for d in deals:
+            semantic = (d.get("STAGE_SEMANTIC_ID") or "").strip()
+            stage_id = d.get("STAGE_ID") or ""
+            try:
+                amount = float(d.get("OPPORTUNITY") or 0)
+            except (TypeError, ValueError):
+                amount = 0.0
+            total_amount += amount
+
+            # «Продажа» = договор заключён (стадия PREPARATION и дальше),
+            # не только полностью завершённая сделка WON.
+            is_sale = False
+            if semantic == "F" or stage_id == "LOSE":
+                lost += 1
+                res = "Проиграно"
+            elif stage_id in CONTRACT_STAGES or semantic == "S":
+                won += 1
+                won_amount += amount
+                res = "Продажа (договор заключён)"
+                is_sale = True
+            else:
+                in_progress += 1
+                res = "В работе"
+            by_result[res] = by_result.get(res, 0) + 1
+
+            src = (d.get("SOURCE_ID") or "—").strip() or "—"
+            by_source[src] = by_source.get(src, 0) + 1
+            if is_sale:
+                slot = sales_by_source.setdefault(src, {"deals": 0, "amount": 0.0})
+                slot["deals"] += 1
+                slot["amount"] += amount
+
+            stage = DEAL_STAGES.get(d.get("STAGE_ID"), d.get("STAGE_ID") or "—")
+            by_stage[stage] = by_stage.get(stage, 0) + 1
+
+            direction = _resolve_direction(d.get("UF_CRM_651D2BA47419A"), DEAL_DIRECTIONS) or "—"
+            by_direction[direction] = by_direction.get(direction, 0) + 1
+
+            manager = _resolve_manager(d.get("ASSIGNED_BY_ID"), users_map) or "—"
+            by_manager[manager] = by_manager.get(manager, 0) + 1
+
+        counted = len(deals)
+
+        def _sorted(d: Dict[str, int]) -> Dict[str, int]:
+            return dict(sorted(d.items(), key=lambda kv: kv[1], reverse=True))
+
+        sales_sorted = {
+            k: {"deals": v["deals"], "amount": round(v["amount"])}
+            for k, v in sorted(
+                sales_by_source.items(), key=lambda kv: kv[1]["deals"], reverse=True
+            )
+        }
+
+        summary = {
+            "period": {"from": params.get("date_from"), "to": params.get("date_to")},
+            "filters": {
+                "source_ids": params.get("source_ids"),
+                "direction_ids": params.get("direction_ids"),
+                "manager_name": params.get("manager_name"),
+            },
+            "total": total,
+            "result": {
+                "won": won,
+                "lost": lost,
+                "in_progress": in_progress,
+                "won_amount": round(won_amount),
+                "total_amount": round(total_amount),
+            },
+            "by_source": _sorted(by_source),
+            "by_stage": _sorted(by_stage),
+            "by_result": _sorted(by_result),
+            "by_direction": _sorted(by_direction),
+            "by_manager": _sorted(by_manager),
+            "sales_by_source": sales_sorted,
+            "note": (
+                "sales_by_source — продажи (выигранные сделки) по каналам: "
+                "count сделок и сумма ₽. by_source — все сделки по каналам."
+            ),
+        }
+        if total > counted:
+            summary["partial"] = True
+            summary["note"] += (
+                f" ВНИМАНИЕ: точный total={total}, но разбивки по первым "
+                f"{counted} сделкам (предел {HARD_CAP}). Сузь период."
             )
         return summary
 

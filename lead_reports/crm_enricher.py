@@ -43,7 +43,7 @@ DEAL_STAGES: Dict[str, str] = {
 _MEASUREMENT_STAGE = "UC_BFLJ2N"  # «Замер выполнен»
 
 # Reaching any of these means the contract is signed → deal "Успешна".
-_CONTRACT_STAGES = {
+CONTRACT_STAGES = {
     "PREPARATION", "UC_5EL81I", "UC_84WK2U", "UC_BSBCZY", "UC_68KU96", "WON",
 }
 
@@ -51,7 +51,7 @@ _CONTRACT_STAGES = {
 # even without a stage-history record for UC_BFLJ2N.
 _POST_MEASUREMENT_STAGES = {
     "UC_BFLJ2N", "UC_P5PQEP", "UC_J5Q08F", "UC_AOH41K", "UC_19II4Y",
-} | _CONTRACT_STAGES
+} | CONTRACT_STAGES
 
 
 def _empty(reason: str = "Не найдено в CRM") -> Dict[str, Any]:
@@ -74,7 +74,7 @@ def _deal_result(stage_id: str, semantic: str) -> str:
     """Успешна (contract signed) / Провалена / В работе."""
     if semantic == "F" or stage_id == "LOSE":
         return "Провалена"
-    if stage_id in _CONTRACT_STAGES or semantic == "S":
+    if stage_id in CONTRACT_STAGES or semantic == "S":
         return "Успешна"
     return "В работе"
 
