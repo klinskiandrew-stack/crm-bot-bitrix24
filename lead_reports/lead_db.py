@@ -220,13 +220,20 @@ async def update_crm(lead_id: int, crm: Dict[str, Any]) -> None:
 
 async def get_for_crm_sync(limit: int = 1000) -> List[Dict[str, Any]]:
     """Leads whose CRM data should be (re)synced: never synced yet, or
-    synced but still 'live' (not a final outcome). Final = Неквал, or a
-    finished deal (Успешна/Провалена) — those no longer change."""
+    synced but not yet at a FINAL outcome.
+
+    Final = the lead is Неквал, OR a finished deal (Успешна/Провалена) —
+    those no longer change. Everything else keeps re-syncing: a lead 'В
+    работе' (no deal yet) or 'Не найдено в CRM' may still grow a deal,
+    and a live deal moves between stages — so they must not be frozen
+    after the first sync.
+    """
     rows = await db.fetch_all(
         "SELECT * FROM lead_reports WHERE status = 'done' AND ("
         "  crm_synced_at IS NULL "
-        "  OR (crm_outcome NOT IN ('Неквал', 'Не найдено в CRM') "
-        "      AND (crm_deal_result IS NULL OR crm_deal_result = 'В работе'))"
+        "  OR (crm_outcome != 'Неквал' "
+        "      AND (crm_deal_result IS NULL "
+        "           OR crm_deal_result NOT IN ('Успешна', 'Провалена')))"
         ") ORDER BY id ASC LIMIT ?",
         (limit,),
     )

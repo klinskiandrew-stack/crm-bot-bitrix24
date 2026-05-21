@@ -55,6 +55,16 @@ class Bitrix24Client:
         if self._session is None:
             self._session = aiohttp.ClientSession()
 
+    async def close(self):
+        """Close the underlying HTTP session.
+
+        Safe to call on a client used outside `async with` (e.g. the
+        standalone crm_refresh job, which builds its own client).
+        """
+        if self._session is not None and not self._session.closed:
+            await self._session.close()
+        self._session = None
+
     async def _call_get(self, method: str, params: Dict[str, Any] = None) -> Dict[str, Any]:
         """GET call — used for single-entity methods (crm.lead.get, crm.deal.get)
         where POST+JSON sometimes fails with 'ID is not defined or invalid'.
@@ -494,7 +504,13 @@ class Bitrix24Client:
         return out
 
     async def get_deals_by_lead(self, lead_id: int) -> List[Dict[str, Any]]:
-        """All deals converted from a given lead (crm.deal.list by LEAD_ID)."""
+        """All deals converted from a given lead (crm.deal.list by LEAD_ID).
+
+        Selects the «Дата замера» UF fields (UF_CRM_1741083174473 = Дата
+        замера, UF_CRM_644F9F3198FD1 = Дата и время замера) so the call-
+        reports enricher can tell whether an on-site measurement happened
+        without an extra crm.deal.get round-trip.
+        """
         items, _total = await self._paginate(
             "crm.deal.list",
             {
@@ -502,6 +518,7 @@ class Bitrix24Client:
                 "select": [
                     "ID", "TITLE", "STAGE_ID", "STAGE_SEMANTIC_ID",
                     "OPPORTUNITY", "CATEGORY_ID", "DATE_CREATE", "CLOSED",
+                    "UF_CRM_1741083174473", "UF_CRM_644F9F3198FD1",
                 ],
             },
             limit=20,
