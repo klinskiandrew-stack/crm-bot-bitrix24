@@ -6,6 +6,7 @@ so the model size is configurable (whisper_model) and a 2GB swap file
 backs it up. transcribe() is blocking; callers run it via asyncio.to_thread.
 """
 
+import asyncio
 import threading
 import time
 
@@ -17,6 +18,12 @@ logger = structlog.get_logger()
 
 _model = None
 _model_lock = threading.Lock()
+
+# Process-wide async lock — only ONE Whisper transcription runs at a
+# time. Two concurrent runs need ~2.5GB and would OOM the box. Shared by
+# the lead-reports pipeline (call recordings) and the voice-command
+# handler (Telegram voice messages).
+transcribe_lock = asyncio.Lock()
 
 
 def _get_model():

@@ -78,6 +78,11 @@ class Settings(BaseSettings):
     # Share the sheet with the service account as Editor.
     lead_reports_sheet_id: str = ""
 
+    # Voice commands — transcribe a Telegram voice message / video-note
+    # with the local Whisper and answer it like a typed question. Reuses
+    # the lead-reports STT (faster-whisper). Toggle off to disable.
+    voice_commands_enabled: bool = True
+
     # Which provider to use for LLM calls: "kie" or "deepseek"
     llm_provider: str = "kie"
 

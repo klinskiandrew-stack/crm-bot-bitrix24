@@ -2,7 +2,7 @@ from aiogram import Dispatcher, types, F
 from aiogram.fsm.storage.memory import MemoryStorage
 from bot.middlewares.auth import AuthMiddleware
 from bot.middlewares.chat_members import ChatMembersMiddleware
-from bot.handlers import admin, group, private, callbacks
+from bot.handlers import admin, group, private, callbacks, voice
 from bot.handlers import meetings as meetings_handler
 import structlog
 
@@ -28,6 +28,7 @@ def create_dispatcher() -> Dispatcher:
     dp.include_router(meetings_handler.router)
     dp.include_router(group.router)
     dp.include_router(private.router)
+    dp.include_router(voice.router)
     dp.include_router(callbacks.router)
 
     logger.info("Dispatcher created and configured")

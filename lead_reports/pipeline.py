@@ -22,8 +22,8 @@ from lead_reports import (
 
 logger = structlog.get_logger()
 
-# Process-wide: only one transcription batch runs at a time.
-_stt_lock = asyncio.Lock()
+# Whisper is serialised process-wide via stt.transcribe_lock — shared
+# with the voice-command handler so the two never run STT concurrently.
 
 # Lazy shared Bitrix client for CRM enrichment.
 _b24_client: Bitrix24Client = None
@@ -82,11 +82,11 @@ async def _analyse_and_export(lead_id: int) -> None:
 async def transcribe_pending(limit: int = 200) -> Dict[str, Any]:
     """Process every pending lead end-to-end, one at a time.
 
-    Serialised by _stt_lock. Whisper is unloaded from RAM at the end.
+    Serialised by stt.transcribe_lock. Whisper is unloaded at the end.
     """
     result: Dict[str, Any] = {"processed": 0, "ok": 0, "failed": 0}
 
-    async with _stt_lock:
+    async with stt.transcribe_lock:
         # 1. Catch up leads transcribed earlier but not yet analysed.
         for lead in await lead_db.get_pending_analysis(limit=limit):
             await _analyse_and_export(lead["id"])
