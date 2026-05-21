@@ -60,17 +60,33 @@ def _lead_older_than_24h(lead: Dict[str, Any]) -> bool:
     return datetime.utcnow() - created > timedelta(hours=24)
 
 
+async def _fail(lead: Dict[str, Any], reason: str) -> bool:
+    """Mark a lead failed AND notify the sphere ИТМ chat. Returns False."""
+    from lead_reports.notifications import notify_lead_error
+
+    await lead_db.mark_error(lead.get("id"), reason)
+    await notify_lead_error(
+        company=lead.get("company") or "",
+        phone=lead.get("phone") or "",
+        call_datetime=lead.get("call_datetime") or "",
+        reason=reason,
+        recording_url=lead.get("recording_url") or "",
+    )
+    return False
+
+
 async def process_lead(lead: Dict[str, Any]) -> bool:
     """Download + transcribe one lead's recording, update the DB.
 
-    Returns True on success, False on failure (row marked status=error).
-    Never raises — the caller processes leads in a loop.
+    Returns True on success, False on failure. A final failure marks the
+    row status=error and posts a notice to the sphere ИТМ chat. A 404
+    (recording not published yet) is NOT a failure — the lead stays
+    'parsed' for the hourly retry. Never raises.
     """
     lead_id = lead.get("id")
     url = lead.get("recording_url")
     if not url:
-        await lead_db.mark_error(lead_id, "Нет ссылки на запись разговора")
-        return False
+        return await _fail(lead, "Нет ссылки на запись разговора")
 
     try:
         local_path = await download_recording(url, settings.lead_recordings_dir)
@@ -82,26 +98,22 @@ async def process_lead(lead: Dict[str, Any]) -> bool:
         # give up if it's been stuck >24h (then the file is truly gone).
         if "404" in msg or "Not Found" in msg:
             if _lead_older_than_24h(lead):
-                await lead_db.mark_error(lead_id, f"Запись недоступна более суток: {msg}")
                 logger.warning("Recording still 404 after 24h — giving up", lead_id=lead_id)
-            else:
-                logger.info("Recording not ready yet (404) — will retry", lead_id=lead_id)
+                return await _fail(lead, "Запись разговора недоступна более суток")
+            logger.info("Recording not ready yet (404) — will retry", lead_id=lead_id)
             return False
         logger.error("Recording download failed", lead_id=lead_id, error=msg)
-        await lead_db.mark_error(lead_id, f"Скачивание не удалось: {e}")
-        return False
+        return await _fail(lead, f"Скачивание записи не удалось: {e}")
 
     try:
         # Whisper is blocking and CPU-heavy — off the event loop.
         transcript = await asyncio.to_thread(stt.transcribe, local_path)
     except Exception as e:
         logger.error("Transcription failed", lead_id=lead_id, error=str(e))
-        await lead_db.mark_error(lead_id, f"Транскрибация не удалась: {e}")
-        return False
+        return await _fail(lead, f"Транскрибация не удалась: {e}")
 
     if not transcript:
-        await lead_db.mark_error(lead_id, "Пустой транскрипт (тишина/короткий звонок?)")
-        return False
+        return await _fail(lead, "Пустой транскрипт (тишина / короткий звонок?)")
 
     await lead_db.update_transcription(lead_id, local_path, transcript)
     logger.info("Lead transcribed", lead_id=lead_id, chars=len(transcript))
