@@ -28,9 +28,10 @@ async def report_exists(message_id: int) -> bool:
     return row is not None
 
 
-async def save_report(parsed: Dict[str, Any], message_id: int, chat_id: int) -> bool:
-    """Insert a parsed report. Returns True if a new row was created,
-    False if this message_id was already present (dedup)."""
+async def save_report(parsed: Dict[str, Any], message_id: int, chat_id: int):
+    """Insert a parsed report. Returns the new row id if created, or None
+    if this message_id was already present (dedup). The id is truthy, so
+    callers that use it as a boolean still work."""
     columns = ["message_id", "chat_id", *_REPORT_FIELDS, "status"]
     placeholders = ", ".join("?" for _ in columns)
     values = [message_id, chat_id]
@@ -43,15 +44,24 @@ async def save_report(parsed: Dict[str, Any], message_id: int, chat_id: int) -> 
         tuple(values),
     )
     await db.commit()
-    inserted = cursor.rowcount > 0
-    if inserted:
+    if cursor.rowcount > 0:
         logger.info(
             "Lead report saved",
             message_id=message_id,
             company=parsed.get("company"),
             phone=parsed.get("phone"),
         )
-    return inserted
+        return cursor.lastrowid
+    return None
+
+
+async def set_notify_message_id(lead_id: int, message_id: int) -> None:
+    """Remember the id of the bot's progress message for this lead."""
+    await db.execute(
+        "UPDATE lead_reports SET notify_message_id = ? WHERE id = ?",
+        (message_id, lead_id),
+    )
+    await db.commit()
 
 
 async def get_recent(limit: int = 10) -> List[Dict[str, Any]]:

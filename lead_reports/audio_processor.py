@@ -61,17 +61,12 @@ def _lead_older_than_24h(lead: Dict[str, Any]) -> bool:
 
 
 async def _fail(lead: Dict[str, Any], reason: str) -> bool:
-    """Mark a lead failed AND notify the sphere ИТМ chat. Returns False."""
-    from lead_reports.notifications import notify_lead_error
+    """Mark a lead failed AND show the error on its progress message.
+    Returns False."""
+    from lead_reports.notifications import update_lead_status
 
     await lead_db.mark_error(lead.get("id"), reason)
-    await notify_lead_error(
-        company=lead.get("company") or "",
-        phone=lead.get("phone") or "",
-        call_datetime=lead.get("call_datetime") or "",
-        reason=reason,
-        recording_url=lead.get("recording_url") or "",
-    )
+    await update_lead_status(lead, "error", reason)
     return False
 
 
@@ -83,10 +78,14 @@ async def process_lead(lead: Dict[str, Any]) -> bool:
     (recording not published yet) is NOT a failure — the lead stays
     'parsed' for the hourly retry. Never raises.
     """
+    from lead_reports.notifications import update_lead_status
+
     lead_id = lead.get("id")
     url = lead.get("recording_url")
     if not url:
         return await _fail(lead, "Нет ссылки на запись разговора")
+
+    await update_lead_status(lead, "transcribing")
 
     try:
         local_path = await download_recording(url, settings.lead_recordings_dir)
@@ -101,6 +100,7 @@ async def process_lead(lead: Dict[str, Any]) -> bool:
                 logger.warning("Recording still 404 after 24h — giving up", lead_id=lead_id)
                 return await _fail(lead, "Запись разговора недоступна более суток")
             logger.info("Recording not ready yet (404) — will retry", lead_id=lead_id)
+            await update_lead_status(lead, "waiting")
             return False
         logger.error("Recording download failed", lead_id=lead_id, error=msg)
         return await _fail(lead, f"Скачивание записи не удалось: {e}")

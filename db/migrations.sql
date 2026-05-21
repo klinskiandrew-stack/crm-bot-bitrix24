@@ -176,7 +176,8 @@ CREATE TABLE IF NOT EXISTS lead_reports (
     crm_reason           TEXT,                      -- причина отказа (UF_CRM_1723465843)
     crm_manager_comment  TEXT,                      -- поле «Комментарий» карточки лида
     crm_card_url         TEXT,                      -- ссылка на карточку в Bitrix
-    crm_synced_at        TIMESTAMP                  -- когда последний раз обновляли из CRM
+    crm_synced_at        TIMESTAMP,                 -- когда последний раз обновляли из CRM
+    notify_message_id    INTEGER                    -- id прогресс-сообщения бота в чате sphere ИТМ
 );
 CREATE INDEX IF NOT EXISTS idx_lead_reports_status ON lead_reports(status);
 CREATE INDEX IF NOT EXISTS idx_lead_reports_call_dt ON lead_reports(call_datetime);

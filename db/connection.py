@@ -48,6 +48,7 @@ class Database:
             ("crm_manager_comment", "TEXT"),
             ("crm_card_url", "TEXT"),
             ("crm_synced_at", "TIMESTAMP"),
+            ("notify_message_id", "INTEGER"),
         ):
             await self._ensure_column("lead_reports", col, definition)
 

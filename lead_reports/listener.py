@@ -65,14 +65,26 @@ class LeadReportsListener:
             parsed = parse_report(text, extract_urls(msg.entities))
             if not parsed:
                 return
-            saved = await save_report(parsed, msg.id, event.chat_id)
-            if saved:
+            lead_id = await save_report(parsed, msg.id, event.chat_id)
+            if lead_id:
                 logger.info(
                     "New lead report collected",
                     message_id=msg.id,
                     company=parsed.get("company"),
                     phone=parsed.get("phone"),
                 )
+                # Post the progress message (reply to Amely's report) and
+                # remember its id so pipeline stages can edit it.
+                try:
+                    from lead_reports.notifications import post_lead_queued
+                    from lead_reports.lead_db import set_notify_message_id
+                    mid = await post_lead_queued(
+                        msg.id, parsed.get("phone") or "", parsed.get("company") or ""
+                    )
+                    if mid:
+                        await set_notify_message_id(lead_id, mid)
+                except Exception as e:
+                    logger.warning("Progress message post failed", error=str(e))
                 # Transcribe in the background — the STT lock serialises
                 # this with any other running batch, so no RAM clash.
                 trigger_transcription_bg()

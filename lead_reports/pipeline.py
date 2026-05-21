@@ -43,9 +43,12 @@ async def _analyse_and_export(lead_id: int) -> None:
     Network-bound (DeepSeek + Bitrix + Sheets) — no RAM contention. A
     lead whose analysis fails stays 'transcribed' and is retried later.
     """
+    from lead_reports.notifications import update_lead_status
+
     lead = await lead_db.get_by_id(lead_id)
     transcript = lead.get("transcript") if lead else None
     if transcript:
+        await update_lead_status(lead, "analyzing")
         verdict = await call_analyzer.analyze(transcript)
         if verdict:
             await lead_db.update_analysis(
@@ -70,6 +73,10 @@ async def _analyse_and_export(lead_id: int) -> None:
         await sheets_exporter.export_pending(limit=50)
     except Exception as e:
         logger.error("Incremental export failed", lead_id=lead_id, error=str(e))
+
+    # Final status on the progress message.
+    if lead:
+        await update_lead_status(lead, "done")
 
 
 async def transcribe_pending(limit: int = 200) -> Dict[str, Any]:
