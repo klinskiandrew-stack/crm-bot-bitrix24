@@ -11,11 +11,16 @@ from sheets.lus_client import lus_client
 from sheets.pnl_client import pnl_client
 from avito.client import avito_client
 from exports.leads_excel import build_leads_xlsx, LEAD_STATUS_RU
+from ai.tools import get_tools_definitions
 from config import settings
 
 logger = structlog.get_logger()
 
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+# Tool registry: every schema name has a ToolHandlers method of the same
+# name. handle_tool dispatches by getattr against this whitelist.
+_KNOWN_TOOL_NAMES = frozenset(t["name"] for t in get_tools_definitions())
 
 
 # ============================================================
@@ -205,72 +210,21 @@ class ToolHandlers:
         return [matches[0][0]], None
 
     async def handle_tool(self, tool_name: str, tool_input: Dict[str, Any], user_context: Dict[str, Any]) -> Dict[str, Any]:
-        """Route to appropriate tool handler."""
+        """Route a tool call to the handler method of the same name.
+
+        Every tool's schema name equals its handler method name, so the
+        registry is just the whitelist of known names (_KNOWN_TOOL_NAMES,
+        built from the tool schemas) — no if/elif ladder. The whitelist
+        check keeps getattr from reaching non-tool methods.
+        """
+        if tool_name not in _KNOWN_TOOL_NAMES:
+            return {"error": f"Unknown tool: {tool_name}"}
+        handler = getattr(self, tool_name, None)
+        if handler is None:
+            logger.error("Tool has a schema but no handler method", tool=tool_name)
+            return {"error": f"Tool handler missing: {tool_name}"}
         try:
-            if tool_name == "get_deals":
-                return await self.get_deals(tool_input, user_context)
-            elif tool_name == "get_deal_details":
-                return await self.get_deal_details(tool_input, user_context)
-            elif tool_name == "get_leads":
-                return await self.get_leads(tool_input, user_context)
-            elif tool_name == "search_contacts_or_companies":
-                return await self.search_contacts_or_companies(tool_input, user_context)
-            elif tool_name == "get_pipeline_summary":
-                return await self.get_pipeline_summary(tool_input, user_context)
-            elif tool_name == "get_user_activity_summary":
-                return await self.get_user_activity_summary(tool_input, user_context)
-            elif tool_name == "get_recent_activities":
-                return await self.get_recent_activities(tool_input, user_context)
-            elif tool_name == "count_deals_passed_stage":
-                return await self.count_deals_passed_stage(tool_input, user_context)
-            elif tool_name == "get_lead_full":
-                return await self.get_lead_full(tool_input, user_context)
-            elif tool_name == "get_deal_full":
-                return await self.get_deal_full(tool_input, user_context)
-            elif tool_name == "get_card_comments":
-                return await self.get_card_comments(tool_input, user_context)
-            elif tool_name == "analyze_junk_leads":
-                return await self.analyze_junk_leads(tool_input, user_context)
-            elif tool_name == "analyze_junk_deals":
-                return await self.analyze_junk_deals(tool_input, user_context)
-            elif tool_name == "export_leads_to_excel":
-                return await self.export_leads_to_excel(tool_input, user_context)
-            elif tool_name == "leads_summary":
-                return await self.leads_summary(tool_input, user_context)
-            elif tool_name == "deals_summary":
-                return await self.deals_summary(tool_input, user_context)
-            elif tool_name == "metrika_traffic_summary":
-                return await self.metrika_traffic_summary(tool_input, user_context)
-            elif tool_name == "metrika_traffic_by_source":
-                return await self.metrika_traffic_by_source(tool_input, user_context)
-            elif tool_name == "lus_get_deal":
-                return await self.lus_get_deal(tool_input, user_context)
-            elif tool_name == "lus_search":
-                return await self.lus_search(tool_input, user_context)
-            elif tool_name == "lus_financials":
-                return await self.lus_financials(tool_input, user_context)
-            elif tool_name == "pnl_summary":
-                return await self.pnl_summary(tool_input, user_context)
-            elif tool_name == "pnl_articles":
-                return await self.pnl_articles(tool_input, user_context)
-            elif tool_name == "pnl_month":
-                return await self.pnl_month(tool_input, user_context)
-            elif tool_name == "avito_balance":
-                return await self.avito_balance(tool_input, user_context)
-            elif tool_name == "avito_items":
-                return await self.avito_items(tool_input, user_context)
-            elif tool_name == "avito_stats":
-                return await self.avito_stats(tool_input, user_context)
-            elif tool_name == "avito_spend":
-                return await self.avito_spend(tool_input, user_context)
-            elif tool_name == "avito_calls":
-                return await self.avito_calls(tool_input, user_context)
-            elif tool_name == "avito_funnel":
-                return await self.avito_funnel(tool_input, user_context)
-            elif tool_name == "avito_weak_ads":
-                return await self.avito_weak_ads(tool_input, user_context)
-            else:
-                return {"error": f"Unknown tool: {tool_name}"}
+            return await handler(tool_input, user_context)
         except Exception as e:
             logger.error("Tool handler error", tool=tool_name, error=str(e))
             return {"error": str(e)}
