@@ -1,7 +1,9 @@
 """Сервис данных для дашборда трафика.
 
-Идея: фоновое обновление кэша лидов/сделок по фильтру SOURCE_ID канала
-(по умолчанию SOURCE_ID="6" — ВКонтакте, см. config/sources_mapping.yaml).
+Мультиканальный: грузит лиды/сделки сразу по нескольким каналам
+(ВКонтакте / Авито / Яндекс / Перехват) и тегирует каждую запись
+полем `channel`. Фильтрация по каналу + произвольный период — на
+клиенте.
 
 Кэш живёт в памяти процесса, обновляется APScheduler-ом каждые N минут.
 HTTP-эндпоинты читают только кэш — никаких прямых походов в Bitrix24
@@ -12,49 +14,73 @@ import asyncio
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import structlog
 import yaml
 
 from b24.client import Bitrix24Client
+from config import settings
 
 logger = structlog.get_logger()
 
 _MSK = timezone(timedelta(hours=3))
 
 
-# Сколько дней назад считать "актуальными" лидами. 365 дней — даём
-# фронту достаточно данных, чтобы пользователь крутил период от 7 дней
-# до года без перезапроса.
+# Сколько дней назад считать "актуальными" лидами. 365 дней — даём фронту
+# достаточно данных, чтобы крутить период от 7 дней до года без перезапроса.
 DEFAULT_LOOKBACK_DAYS = 365
 
-# Сколько лидов максимум вытащить за обновление (страничный лимит).
+# Сколько лидов/сделок максимум вытащить на канал за обновление.
 LEAD_FETCH_LIMIT = 1000
 DEAL_FETCH_LIMIT = 500
 
-# Сколько последних карточек подгружать с комментариями сразу (остальные —
-# по клику в UI через /api/vk-lead/.../comments).
-PREFETCH_COMMENTS_FOR_LATEST = 20
+# Сколько последних карточек подгружать с таймлайном сразу (остальные —
+# по клику в UI через /api/comments/...).
+PREFETCH_COMMENTS_FOR_LATEST = 30
+
+# Кастомное поле "Причина отказа" (enumeration) — UF код, постоянный
+# для этого Bitrix-портала.
+REJECTION_REASON_UF = "UF_CRM_1740994523382"
+REJECTION_REASON_DETAIL_UF = "UF_CRM_1723465843"
+
+# Маппинг каналов: (code, label, yaml_key, utm_source_filter).
+CHANNEL_DEFS: List[Tuple[str, str, str, Optional[str]]] = [
+    ("vk",            "ВКонтакте", "ВКонтакте", None),
+    ("avito",         "Авито",     "Авито",     None),
+    ("yandex",        "Яндекс",    "Яндекс",    "yandex"),
+    ("interception",  "Перехват",  "Перехват",  None),
+]
 
 
-def _load_vk_source_ids() -> List[str]:
-    """Читает sources_mapping.yaml и возвращает SOURCE_ID канала ВКонтакте.
-
-    Если файл недоступен/изменился — fallback на ['6'].
-    """
+def _load_sources_mapping() -> Dict[str, Any]:
+    """Читает sources_mapping.yaml целиком."""
     try:
         path = Path(__file__).resolve().parent.parent / "config" / "sources_mapping.yaml"
         if not path.exists():
-            return ["6"]
+            return {}
         with open(path, encoding="utf-8") as f:
-            data = yaml.safe_load(f) or {}
-        vk_cfg = data.get("ВКонтакте") or {}
-        ids = vk_cfg.get("bitrix_source_ids") or ["6"]
-        return [str(x) for x in ids]
+            return yaml.safe_load(f) or {}
     except Exception as e:
-        logger.warning("Failed to load VK source_ids from yaml", error=str(e))
-        return ["6"]
+        logger.warning("Failed to load sources_mapping.yaml", error=str(e))
+        return {}
+
+
+def _build_channels() -> List[Dict[str, Any]]:
+    """Собирает список каналов из CHANNEL_DEFS + yaml-маппинга."""
+    mapping = _load_sources_mapping()
+    out = []
+    for code, label, yaml_key, utm_src in CHANNEL_DEFS:
+        cfg = mapping.get(yaml_key) or {}
+        source_ids = [str(x) for x in (cfg.get("bitrix_source_ids") or [])]
+        out.append({
+            "code": code,
+            "label": label,
+            "yaml_key": yaml_key,
+            "source_ids": source_ids,
+            "utm_source": utm_src,
+        })
+    return out
 
 
 @dataclass
@@ -63,54 +89,55 @@ class CacheState:
 
     leads: List[Dict[str, Any]] = field(default_factory=list)
     deals: List[Dict[str, Any]] = field(default_factory=list)
-    # {entity_type ("lead"|"deal"): {entity_id: [{author, text, created}]}}
     comments: Dict[str, Dict[int, List[Dict[str, Any]]]] = field(
         default_factory=lambda: {"lead": {}, "deal": {}}
     )
-    # Карта STATUS_ID -> человекочитаемое имя (для лидов и стадий сделок)
     lead_statuses: Dict[str, str] = field(default_factory=dict)
     deal_stages: Dict[str, str] = field(default_factory=dict)
-    # Карта user_id -> ФИО менеджера
     users: Dict[int, str] = field(default_factory=dict)
-    # Карта webform_id (str) -> название CRM-формы
     webforms: Dict[str, str] = field(default_factory=dict)
-    # Карта source_id -> человекочитаемое имя источника Bitrix (для табл "Источник")
     source_names: Dict[str, str] = field(default_factory=dict)
+    rejection_reasons: Dict[str, str] = field(default_factory=dict)
     last_refresh: Optional[datetime] = None
     last_error: Optional[str] = None
 
 
-class VKDashboardService:
-    """Singleton-сервис: один кэш, одна корутина обновления."""
+class DashboardService:
+    """Singleton-сервис: один кэш, одна корутина обновления.
 
-    def __init__(self, source_ids: Optional[List[str]] = None, lookback_days: int = DEFAULT_LOOKBACK_DAYS):
-        self.source_ids = source_ids or _load_vk_source_ids()
+    (Раньше класс назывался VKDashboardService — алиас оставлен ниже.)
+    """
+
+    def __init__(self, lookback_days: int = DEFAULT_LOOKBACK_DAYS):
         self.lookback_days = lookback_days
+        self.channels = _build_channels()
         self.state = CacheState()
         self._lock = asyncio.Lock()
-        # Карта статусов — кэш на 24 часа, обновляется при первом refresh.
         self._statuses_expire_at: Optional[datetime] = None
 
     # ---------- Public API ----------
 
     def get_snapshot(self) -> Dict[str, Any]:
-        """JSON-готовый снапшот для /api/vk-leads."""
+        """JSON-готовый снапшот для /api/leads."""
         leads = [self._render_lead(l) for l in self.state.leads]
         deals = [self._render_deal(d) for d in self.state.deals]
 
         return {
-            "source_channel": "ВКонтакте",
-            "source_ids": self.source_ids,
+            "channels": [
+                {"code": c["code"], "label": c["label"], "source_ids": c["source_ids"]}
+                for c in self.channels
+            ],
             "lookback_days": self.lookback_days,
             "last_refresh": self.state.last_refresh.astimezone(_MSK).isoformat() if self.state.last_refresh else None,
             "last_error": self.state.last_error,
             "stats": self._build_stats(leads, deals),
             "leads": leads,
             "deals": deals,
+            "rejection_reasons": self.state.rejection_reasons,
         }
 
     async def get_comments_for(self, entity_type: str, entity_id: int) -> List[Dict[str, Any]]:
-        """Возвращает кэш комментариев. Если нет — фетчит сейчас."""
+        """Возвращает кэш комментариев таймлайна. Если нет — фетчит сейчас."""
         et = entity_type if entity_type in ("lead", "deal") else "lead"
         cached = self.state.comments.get(et, {}).get(entity_id)
         if cached is not None:
@@ -123,13 +150,12 @@ class VKDashboardService:
             self.state.comments[et][entity_id] = rendered
             return rendered
         finally:
-            if b24._session and not b24._session.closed:
-                await b24._session.close()
+            await b24.close()
 
     async def refresh(self) -> None:
         """Полное обновление кэша. Идемпотентно, защищено локом."""
         if self._lock.locked():
-            logger.info("VK dashboard refresh already running — skipping")
+            logger.info("Dashboard refresh already running — skipping")
             return
 
         async with self._lock:
@@ -141,54 +167,115 @@ class VKDashboardService:
                 self.state.last_error = None
                 duration = (datetime.now(timezone.utc) - started).total_seconds()
                 logger.info(
-                    "VK dashboard refresh done",
+                    "Dashboard refresh done",
                     leads=len(self.state.leads),
                     deals=len(self.state.deals),
+                    channels=[c["code"] for c in self.channels],
                     seconds=round(duration, 2),
                 )
             except Exception as e:
-                logger.exception("VK dashboard refresh failed")
+                logger.exception("Dashboard refresh failed")
                 self.state.last_error = f"{type(e).__name__}: {e}"
             finally:
-                if b24._session and not b24._session.closed:
-                    await b24._session.close()
+                await b24.close()
 
     # ---------- Internal: data fetching ----------
+
+    async def _fetch_channel_leads(
+        self, b24: Bitrix24Client, channel: Dict[str, Any], date_from: str
+    ) -> List[Dict[str, Any]]:
+        """Лиды одного канала + тег channel-полем. include_full_utm=True даёт
+        UTM_CONTENT/UTM_TERM в select."""
+        if not channel["source_ids"]:
+            return []
+        leads = await b24.get_leads(
+            assigned_by_ids=[],
+            filter_by_date_from=date_from,
+            filter_by_source_ids=channel["source_ids"],
+            filter_by_utm_source=channel.get("utm_source"),
+            include_full_utm=True,
+            limit=LEAD_FETCH_LIMIT,
+        )
+        if not isinstance(leads, list):
+            return []
+        for l in leads:
+            l["_channel"] = channel["code"]
+            l["_channel_label"] = channel["label"]
+        return leads
+
+    async def _fetch_channel_deals(
+        self, b24: Bitrix24Client, channel: Dict[str, Any], date_from: str
+    ) -> List[Dict[str, Any]]:
+        if not channel["source_ids"]:
+            return []
+        deals = await b24.get_deals(
+            assigned_by_ids=[],
+            filter_by_date_from=date_from,
+            filter_by_source_ids=channel["source_ids"],
+            filter_by_utm_source=channel.get("utm_source"),
+            limit=DEAL_FETCH_LIMIT,
+        )
+        if not isinstance(deals, list):
+            return []
+        for d in deals:
+            d["_channel"] = channel["code"]
+            d["_channel_label"] = channel["label"]
+        return deals
 
     async def _refresh_inner(self, b24: Bitrix24Client) -> None:
         date_from = (datetime.now(_MSK).date() - timedelta(days=self.lookback_days)).strftime("%Y-%m-%d")
 
-        # 1. Лиды + сделки параллельно.
-        leads_task = b24.get_leads(
-            assigned_by_ids=[],
-            filter_by_date_from=date_from,
-            filter_by_source_ids=self.source_ids,
-            limit=LEAD_FETCH_LIMIT,
-        )
-        deals_task = b24.get_deals(
-            assigned_by_ids=[],
-            filter_by_date_from=date_from,
-            filter_by_source_ids=self.source_ids,
-            limit=DEAL_FETCH_LIMIT,
-        )
-        leads, deals = await asyncio.gather(leads_task, deals_task)
+        # 1. Параллельно по каналам.
+        lead_tasks = [self._fetch_channel_leads(b24, c, date_from) for c in self.channels]
+        deal_tasks = [self._fetch_channel_deals(b24, c, date_from) for c in self.channels]
+        all_results = await asyncio.gather(*lead_tasks, *deal_tasks, return_exceptions=True)
+        n = len(self.channels)
+        lead_results = all_results[:n]
+        deal_results = all_results[n:]
 
-        leads = leads if isinstance(leads, list) else []
-        deals = deals if isinstance(deals, list) else []
+        leads: List[Dict[str, Any]] = []
+        deals: List[Dict[str, Any]] = []
+        for res in lead_results:
+            if isinstance(res, list):
+                leads.extend(res)
+        for res in deal_results:
+            if isinstance(res, list):
+                deals.extend(res)
+
+        # Дедуп по ID (на всякий случай).
+        seen = set()
+        uniq = []
+        for l in leads:
+            lid = l.get("ID")
+            if lid in seen:
+                continue
+            seen.add(lid)
+            uniq.append(l)
+        leads = uniq
+
+        seen = set()
+        uniq = []
+        for d in deals:
+            did = d.get("ID")
+            if did in seen:
+                continue
+            seen.add(did)
+            uniq.append(d)
+        deals = uniq
 
         # 2. Сортируем по дате создания — свежие сверху.
         leads.sort(key=lambda x: x.get("DATE_CREATE") or "", reverse=True)
         deals.sort(key=lambda x: x.get("DATE_CREATE") or "", reverse=True)
 
-        # 3. Карта статусов/стадий (если устарела или не было).
+        # 3. Карты статусов/UF (раз в 24 часа).
         if self._statuses_expire_at is None or datetime.now(timezone.utc) > self._statuses_expire_at:
             await self._refresh_status_maps(b24)
             self._statuses_expire_at = datetime.now(timezone.utc) + timedelta(hours=24)
 
-        # 4. Менеджеры (только те, что встречаются в выборке).
+        # 4. Менеджеры.
         await self._refresh_user_names(b24, leads, deals)
 
-        # 5. Прелоад комментариев для последних 20 карточек.
+        # 5. Прелоад комментариев таймлайна для последних N карточек.
         new_comments: Dict[str, Dict[int, List[Dict[str, Any]]]] = {"lead": {}, "deal": {}}
         prefetch_leads = leads[:PREFETCH_COMMENTS_FOR_LATEST]
         prefetch_deals = deals[:PREFETCH_COMMENTS_FOR_LATEST]
@@ -215,16 +302,16 @@ class VKDashboardService:
         self.state.comments = new_comments
 
     async def _refresh_status_maps(self, b24: Bitrix24Client) -> None:
-        """Подтягивает имена стадий лидов и сделок + CRM-форм + источников."""
+        """Подтягивает статусы лидов, стадии сделок, источники, формы, enum-значения причин отказа."""
         # Лиды
         resp = await b24._call("crm.status.list", {"filter": {"ENTITY_ID": "STATUS"}})
-        if isinstance(resp, dict) and "result" in resp and isinstance(resp["result"], list):
+        if isinstance(resp, dict) and isinstance(resp.get("result"), list):
             self.state.lead_statuses = {
                 str(s.get("STATUS_ID")): str(s.get("NAME") or s.get("STATUS_ID"))
                 for s in resp["result"]
             }
 
-        # Сделки (все воронки разом)
+        # Сделки
         stages = await b24.get_deal_stages()
         if isinstance(stages, list):
             self.state.deal_stages = {
@@ -232,7 +319,7 @@ class VKDashboardService:
                 for s in stages
             }
 
-        # Источники (SOURCE_ID → имя). Берём из CRM-статусов с ENTITY_ID=SOURCE.
+        # Источники (SOURCE_ID → имя)
         src_resp = await b24._call("crm.status.list", {"filter": {"ENTITY_ID": "SOURCE"}})
         if isinstance(src_resp, dict) and isinstance(src_resp.get("result"), list):
             self.state.source_names = {
@@ -240,11 +327,10 @@ class VKDashboardService:
                 for s in src_resp["result"]
             }
 
-        # CRM-формы. crm.webform.list возвращает {ID, NAME, ACTIVE, ...}.
+        # CRM-формы
         wf_resp = await b24._call("crm.webform.list", {})
         if isinstance(wf_resp, dict):
             forms = wf_resp.get("result") or []
-            # На некоторых порталах ответ обёрнут в {forms: [...]}
             if isinstance(forms, dict):
                 forms = forms.get("forms") or []
             if isinstance(forms, list):
@@ -254,10 +340,25 @@ class VKDashboardService:
                     if (f.get("ID") or f.get("id"))
                 }
 
+        # Причина отказа — enumeration. crm.item.fields отдаёт items.
+        fields_resp = await b24._call_get(
+            "crm.item.fields",
+            {"entityTypeId": 1, "useOriginalUfNames": "Y"},
+        )
+        if isinstance(fields_resp, dict):
+            all_fields = (fields_resp.get("result") or {}).get("fields") or {}
+            reason_meta = all_fields.get(REJECTION_REASON_UF) or {}
+            items = reason_meta.get("items") or []
+            self.state.rejection_reasons = {
+                str(i.get("ID")): str(i.get("VALUE") or i.get("ID"))
+                for i in items
+                if i.get("ID") is not None
+            }
+
     async def _refresh_user_names(
         self, b24: Bitrix24Client, leads: List[Dict[str, Any]], deals: List[Dict[str, Any]]
     ) -> None:
-        """Подтягивает ФИО менеджеров (ASSIGNED_BY_ID) одним батчем."""
+        """ФИО менеджеров одним батчем."""
         needed_ids = set()
         for r in leads:
             uid = r.get("ASSIGNED_BY_ID")
@@ -268,12 +369,10 @@ class VKDashboardService:
             if uid:
                 needed_ids.add(int(uid))
 
-        # Только новые юзеры (старых имена держим в кэше)
         new_ids = [i for i in needed_ids if i not in self.state.users]
         if not new_ids:
             return
 
-        # user.get умеет фильтр по списку ID
         resp = await b24._call("user.get", {"ID": new_ids})
         if isinstance(resp, dict) and isinstance(resp.get("result"), list):
             for u in resp["result"]:
@@ -285,6 +384,17 @@ class VKDashboardService:
 
     # ---------- Rendering ----------
 
+    def _build_card_url(self, kind: str, entity_id: int) -> str:
+        """Ссылка на карточку: https://<portal>/crm/lead|deal/details/{id}/"""
+        base = settings.b24_portal_url
+        return f"{base}/crm/{kind}/details/{entity_id}/"
+
+    def _resolve_rejection(self, value: Any) -> str:
+        """UF_CRM_1740994523382 хранится как ID опции. Резолвим в подпись."""
+        if value is None or value == "":
+            return ""
+        return self.state.rejection_reasons.get(str(value), str(value))
+
     def _render_lead(self, lead: Dict[str, Any]) -> Dict[str, Any]:
         lead_id = int(lead.get("ID") or 0)
         status_id = lead.get("STATUS_ID") or ""
@@ -295,6 +405,9 @@ class VKDashboardService:
             "id": lead_id,
             "title": lead.get("TITLE") or "",
             "name": lead.get("NAME") or "",
+            "card_url": self._build_card_url("lead", lead_id),
+            "channel": lead.get("_channel") or "",
+            "channel_label": lead.get("_channel_label") or "",
             "status_id": status_id,
             "status_name": self.state.lead_statuses.get(status_id, status_id),
             "status_semantic": lead.get("STATUS_SEMANTIC_ID") or "",
@@ -311,6 +424,9 @@ class VKDashboardService:
             "utm_campaign": lead.get("UTM_CAMPAIGN") or "",
             "utm_content": lead.get("UTM_CONTENT") or "",
             "utm_term": lead.get("UTM_TERM") or "",
+            "rejection_reason": self._resolve_rejection(lead.get(REJECTION_REASON_UF)),
+            "rejection_reason_detail": str(lead.get(REJECTION_REASON_DETAIL_UF) or ""),
+            "card_comment": lead.get("COMMENTS") or "",
             "comments_cached": lead_id in self.state.comments.get("lead", {}),
             "comments_count": len(self.state.comments.get("lead", {}).get(lead_id, [])),
             "comments": self.state.comments.get("lead", {}).get(lead_id, []),
@@ -324,6 +440,9 @@ class VKDashboardService:
         return {
             "id": deal_id,
             "title": deal.get("TITLE") or "",
+            "card_url": self._build_card_url("deal", deal_id),
+            "channel": deal.get("_channel") or "",
+            "channel_label": deal.get("_channel_label") or "",
             "stage_id": stage_id,
             "stage_name": self.state.deal_stages.get(stage_id, stage_id),
             "stage_semantic": deal.get("STAGE_SEMANTIC_ID") or "",
@@ -398,12 +517,16 @@ class VKDashboardService:
         }
 
 
+# Алиас для обратной совместимости со старым именем.
+VKDashboardService = DashboardService
+
+
 # Глобальный singleton — один кэш на процесс.
-_service: Optional[VKDashboardService] = None
+_service: Optional[DashboardService] = None
 
 
-def get_service() -> VKDashboardService:
+def get_service() -> DashboardService:
     global _service
     if _service is None:
-        _service = VKDashboardService()
+        _service = DashboardService()
     return _service

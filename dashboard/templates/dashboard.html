@@ -1,0 +1,801 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Дашборд трафика — Growzone</title>
+<style>
+  :root {
+    --bg: #f5f7fa;
+    --panel: #ffffff;
+    --border: #e3e8ef;
+    --text: #1f2937;
+    --muted: #6b7280;
+    --accent: #4f46e5;
+    --good: #10b981;
+    --warn: #f59e0b;
+    --bad: #ef4444;
+    --chip: #eef2ff;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 13px;
+  }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  header {
+    background: linear-gradient(135deg, #4f46e5, #7c3aed);
+    color: white;
+    padding: 16px 24px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+  header h1 { margin: 0; font-size: 18px; font-weight: 600; }
+  header .meta { font-size: 12px; opacity: 0.85; }
+  .container { max-width: 1600px; margin: 0 auto; padding: 16px; }
+  .stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 10px;
+    margin-bottom: 16px;
+  }
+  .stat {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px 14px;
+  }
+  .stat .label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }
+  .stat .value { font-size: 24px; font-weight: 600; margin-top: 2px; color: var(--accent); }
+  .stat .sub { font-size: 11px; color: var(--muted); margin-top: 2px; }
+  .filters {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px 14px;
+    margin-bottom: 12px;
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    align-items: flex-end;
+  }
+  .filters input, .filters select {
+    border: 1px solid var(--border);
+    background: white;
+    border-radius: 5px;
+    padding: 5px 8px;
+    font-size: 12px;
+    min-width: 110px;
+  }
+  .filters label {
+    font-size: 11px;
+    color: var(--muted);
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+  .date-range { display: none; gap: 6px; }
+  .date-range.show { display: inline-flex; }
+  .filters input[type="date"] { min-width: 130px; }
+  .filters .reset {
+    background: white; color: var(--muted);
+    border: 1px solid var(--border); border-radius: 5px;
+    padding: 5px 10px; cursor: pointer; font-size: 11px;
+  }
+  .filters .reset:hover { color: var(--accent); border-color: var(--accent); }
+  .tabs { display: flex; gap: 4px; margin-bottom: 8px; }
+  .tab {
+    background: var(--panel); border: 1px solid var(--border);
+    border-bottom: none; border-radius: 6px 6px 0 0;
+    padding: 7px 14px; cursor: pointer; font-size: 13px; color: var(--muted);
+  }
+  .tab.active { color: var(--accent); border-bottom: 2px solid var(--accent); font-weight: 600; }
+  .table-wrap {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow-x: auto;
+    overflow-y: visible;
+  }
+  table {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+    font-size: 12px;
+    min-width: 1500px;
+  }
+  thead { background: #f9fafb; position: sticky; top: 0; z-index: 1; }
+  th, td {
+    text-align: left; padding: 8px 10px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+    white-space: nowrap;
+  }
+  td.wrap { white-space: normal; min-width: 200px; max-width: 320px; }
+  th {
+    font-weight: 600; color: var(--muted);
+    text-transform: uppercase; font-size: 10px;
+    letter-spacing: 0.5px; user-select: none; cursor: pointer;
+    position: relative;
+  }
+  th .arrow { color: var(--accent); font-size: 9px; margin-left: 3px; }
+  th.sorted { color: var(--accent); }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr:hover { background: #fafbff; }
+  .status {
+    display: inline-block; padding: 2px 7px; border-radius: 10px;
+    font-size: 10px; font-weight: 500; white-space: nowrap;
+  }
+  .status.success { background: #d1fae5; color: #065f46; }
+  .status.process { background: #fef3c7; color: #92400e; }
+  .status.failed { background: #fee2e2; color: #991b1b; }
+  .status.neutral { background: #e5e7eb; color: #374151; }
+  .channel-chip {
+    display: inline-block; background: #ede9fe; color: #5b21b6;
+    border-radius: 4px; padding: 1px 6px; font-size: 10px; font-weight: 500;
+  }
+  .toggle-comments {
+    background: none; border: 1px dashed var(--border);
+    padding: 3px 7px; border-radius: 4px; cursor: pointer;
+    color: var(--muted); font-size: 11px; white-space: nowrap;
+  }
+  .toggle-comments:hover { color: var(--accent); border-color: var(--accent); }
+  .comments-block {
+    margin-top: 6px; background: #fafbff;
+    border-left: 3px solid var(--accent);
+    padding: 6px 8px; border-radius: 4px; max-width: 380px;
+    white-space: normal;
+  }
+  .comment { padding: 4px 0; border-bottom: 1px solid #eef2ff; }
+  .comment:last-child { border-bottom: none; }
+  .comment .author { font-weight: 600; font-size: 11px; color: var(--accent); }
+  .comment .when { color: var(--muted); font-size: 10px; margin-left: 6px; }
+  .comment .text { margin-top: 2px; white-space: pre-wrap; word-break: break-word; font-size: 12px; }
+  .card-comment {
+    background: #fffbeb; border-left: 3px solid var(--warn);
+    padding: 4px 8px; border-radius: 4px; font-size: 11px;
+    margin-bottom: 4px; max-width: 320px; white-space: pre-wrap;
+    word-break: break-word; max-height: 60px; overflow: hidden;
+    position: relative; cursor: pointer;
+  }
+  .card-comment.expanded { max-height: none; }
+  .empty { text-align: center; color: var(--muted); padding: 28px 16px; }
+  .refresh-bar { display: flex; gap: 8px; align-items: center; font-size: 12px; }
+  .btn {
+    background: white; color: var(--accent);
+    border: 1px solid white; border-radius: 5px;
+    padding: 6px 12px; cursor: pointer; font-size: 12px; font-weight: 500;
+  }
+  .btn:hover { opacity: 0.9; }
+  .reason-cell { color: #991b1b; font-size: 11px; max-width: 200px; white-space: normal; }
+  .reason-cell .detail { color: var(--muted); font-style: italic; margin-top: 2px; font-size: 10px; }
+  .lead-title-cell { min-width: 200px; max-width: 280px; white-space: normal; }
+  .lead-title-cell .id-line { color: var(--muted); font-size: 10px; margin-top: 2px; }
+  .utm-cell { font-size: 11px; color: #4b5563; max-width: 140px; white-space: normal; word-break: break-word; }
+  .muted { color: #9ca3af; }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>📊 Дашборд трафика — Growzone CRM</h1>
+    <div class="meta" id="last-refresh">Загрузка…</div>
+  </div>
+  <div class="refresh-bar">
+    <span id="auto-status" style="opacity:.85">Авто: 30 сек</span>
+    <button class="btn" id="refresh-btn">Обновить</button>
+  </div>
+</header>
+
+<div class="container">
+
+  <div class="stats" id="stats"></div>
+
+  <div class="filters">
+    <label>Источник
+      <select id="filter-channel">
+        <option value="">— все —</option>
+      </select>
+    </label>
+    <label>Период
+      <select id="filter-period">
+        <option value="today">Сегодня</option>
+        <option value="7">7 дней</option>
+        <option value="30" selected>30 дней</option>
+        <option value="90">90 дней</option>
+        <option value="180">180 дней</option>
+        <option value="365">Год</option>
+        <option value="custom">Произвольный…</option>
+        <option value="">Всё (до года)</option>
+      </select>
+    </label>
+    <span class="date-range" id="date-range">
+      <label>С <input type="date" id="filter-date-from"></label>
+      <label>По <input type="date" id="filter-date-to"></label>
+    </span>
+
+    <label>Поиск
+      <input type="text" id="filter-search" placeholder="Имя, телефон, текст…">
+    </label>
+    <label>Статус
+      <select id="filter-status"><option value="">— все —</option></select>
+    </label>
+    <label>Менеджер
+      <select id="filter-manager"><option value="">— все —</option></select>
+    </label>
+    <label>Форма
+      <select id="filter-webform"><option value="">— все —</option></select>
+    </label>
+
+    <label>utm_source
+      <select id="filter-utm-source"><option value="">— все —</option></select>
+    </label>
+    <label>utm_medium
+      <select id="filter-utm-medium"><option value="">— все —</option></select>
+    </label>
+    <label>utm_campaign
+      <select id="filter-utm-campaign"><option value="">— все —</option></select>
+    </label>
+    <label>utm_content
+      <select id="filter-utm-content"><option value="">— все —</option></select>
+    </label>
+    <label>utm_term
+      <select id="filter-utm-term"><option value="">— все —</option></select>
+    </label>
+
+    <button class="reset" id="reset-filters">Сбросить фильтры</button>
+  </div>
+
+  <div class="tabs">
+    <div class="tab active" data-tab="leads">Лиды</div>
+    <div class="tab" data-tab="deals">Сделки</div>
+  </div>
+
+  <div id="tab-leads">
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr id="leads-head">
+            <th data-sort="created">Создан</th>
+            <th data-sort="title">Лид</th>
+            <th data-sort="status_name">Статус</th>
+            <th data-sort="rejection_reason">Причина отказа</th>
+            <th data-sort="channel_label">Канал</th>
+            <th data-sort="source_name">Источник</th>
+            <th data-sort="webform_name">Форма</th>
+            <th data-sort="manager">Менеджер</th>
+            <th data-sort="utm_source">utm_source</th>
+            <th data-sort="utm_medium">utm_medium</th>
+            <th data-sort="utm_campaign">utm_campaign</th>
+            <th data-sort="utm_content">utm_content</th>
+            <th data-sort="utm_term">utm_term</th>
+            <th>Комментарии</th>
+          </tr>
+        </thead>
+        <tbody id="leads-body"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div id="tab-deals" style="display:none">
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr id="deals-head">
+            <th data-sort="created">Создана</th>
+            <th data-sort="title">Сделка</th>
+            <th data-sort="stage_name">Стадия</th>
+            <th data-sort="opportunity">Сумма</th>
+            <th data-sort="channel_label">Канал</th>
+            <th data-sort="source_name">Источник</th>
+            <th data-sort="manager">Менеджер</th>
+            <th data-sort="utm_source">utm_source</th>
+            <th data-sort="utm_medium">utm_medium</th>
+            <th data-sort="utm_campaign">utm_campaign</th>
+            <th data-sort="utm_content">utm_content</th>
+            <th data-sort="utm_term">utm_term</th>
+            <th>Комментарии</th>
+          </tr>
+        </thead>
+        <tbody id="deals-body"></tbody>
+      </table>
+    </div>
+  </div>
+
+</div>
+
+<script>
+const REFRESH_MS = 30000;
+const state = {
+  data: null,
+  tab: 'leads',
+  sort: { leads: {col: 'created', dir: 'desc'}, deals: {col: 'created', dir: 'desc'} },
+};
+
+async function fetchData() {
+  try {
+    const res = await fetch('/api/leads', { cache: 'no-store' });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    state.data = await res.json();
+    render();
+  } catch (e) {
+    console.error(e);
+    document.getElementById('last-refresh').textContent = 'Ошибка загрузки: ' + e.message;
+  }
+}
+
+function escapeHtml(s) {
+  if (s == null) return '';
+  return String(s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#039;');
+}
+
+function fmtDate(s) {
+  if (!s) return '—';
+  const m = s.match(/(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/);
+  if (!m) return s;
+  return `${m[3]}.${m[2]}.${m[1].slice(2)} ${m[4]}:${m[5]}`;
+}
+
+function fmtMoney(n) {
+  if (!n) return '—';
+  return Math.round(n).toLocaleString('ru-RU') + ' ₽';
+}
+
+function semanticClass(sem) {
+  switch ((sem || '').toUpperCase()) {
+    case 'S': return 'success';
+    case 'P': return 'process';
+    case 'F': return 'failed';
+    default: return 'neutral';
+  }
+}
+
+function computeStats(leads, deals) {
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const isToday = r => (r.created || '').slice(0, 10) === todayStr;
+  const wonDeals = deals.filter(d => d.is_won);
+  return {
+    leads_total: leads.length,
+    leads_today: leads.filter(isToday).length,
+    deals_total: deals.length,
+    deals_today: deals.filter(isToday).length,
+    deals_won: wonDeals.length,
+    deals_won_sum: wonDeals.reduce((a, d) => a + (d.opportunity || 0), 0),
+  };
+}
+
+function periodLabel() {
+  const v = document.getElementById('filter-period').value;
+  if (!v) return 'Всё (до года)';
+  if (v === 'today') return 'Сегодня';
+  if (v === 'custom') {
+    const f = document.getElementById('filter-date-from').value;
+    const t = document.getElementById('filter-date-to').value;
+    return (f || '...') + ' — ' + (t || '...');
+  }
+  return `${v} дней`;
+}
+
+function channelLabel() {
+  const code = document.getElementById('filter-channel').value;
+  if (!code) return 'Все каналы';
+  const ch = (state.data.channels || []).find(c => c.code === code);
+  return ch ? ch.label : code;
+}
+
+function renderStats(filteredLeads, filteredDeals) {
+  const s = computeStats(filteredLeads, filteredDeals);
+  const wonSum = s.deals_won_sum ? fmtMoney(s.deals_won_sum) : '—';
+  document.getElementById('stats').innerHTML = `
+    <div class="stat">
+      <div class="label">Лиды (в выборке)</div>
+      <div class="value">${s.leads_total}</div>
+      <div class="sub">Сегодня: ${s.leads_today}</div>
+    </div>
+    <div class="stat">
+      <div class="label">Сделки</div>
+      <div class="value">${s.deals_total}</div>
+      <div class="sub">Сегодня: ${s.deals_today}</div>
+    </div>
+    <div class="stat">
+      <div class="label">Выиграно</div>
+      <div class="value">${s.deals_won}</div>
+      <div class="sub">${wonSum}</div>
+    </div>
+    <div class="stat">
+      <div class="label">Канал</div>
+      <div class="value" style="font-size:16px">${escapeHtml(channelLabel())}</div>
+      <div class="sub">Период: ${escapeHtml(periodLabel())}</div>
+    </div>
+  `;
+}
+
+function fillFilterOptions(id, values) {
+  const el = document.getElementById(id);
+  const current = el.value;
+  el.innerHTML = '<option value="">— все —</option>' +
+    values.map(v => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('');
+  if (values.includes(current)) el.value = current;
+}
+
+function fillChannelOptions() {
+  const sel = document.getElementById('filter-channel');
+  const current = sel.value;
+  const channels = state.data.channels || [];
+  sel.innerHTML = '<option value="">— все —</option>' +
+    channels.map(c => `<option value="${escapeHtml(c.code)}">${escapeHtml(c.label)}</option>`).join('');
+  if (channels.some(c => c.code === current)) sel.value = current;
+}
+
+function rebuildFilterOptions() {
+  const allLeads = state.data.leads;
+  const allDeals = state.data.deals;
+  const sets = {
+    status: new Set(), manager: new Set(), webform: new Set(),
+    utmSource: new Set(), utmMedium: new Set(), utmCampaign: new Set(),
+    utmContent: new Set(), utmTerm: new Set(),
+  };
+  for (const r of allLeads) {
+    if (r.status_name) sets.status.add(r.status_name);
+    if (r.manager) sets.manager.add(r.manager);
+    if (r.webform_name) sets.webform.add(r.webform_name);
+    if (r.utm_source) sets.utmSource.add(r.utm_source);
+    if (r.utm_medium) sets.utmMedium.add(r.utm_medium);
+    if (r.utm_campaign) sets.utmCampaign.add(r.utm_campaign);
+    if (r.utm_content) sets.utmContent.add(r.utm_content);
+    if (r.utm_term) sets.utmTerm.add(r.utm_term);
+  }
+  for (const r of allDeals) {
+    if (r.stage_name) sets.status.add(r.stage_name);
+    if (r.manager) sets.manager.add(r.manager);
+    if (r.utm_source) sets.utmSource.add(r.utm_source);
+    if (r.utm_medium) sets.utmMedium.add(r.utm_medium);
+    if (r.utm_campaign) sets.utmCampaign.add(r.utm_campaign);
+    if (r.utm_content) sets.utmContent.add(r.utm_content);
+    if (r.utm_term) sets.utmTerm.add(r.utm_term);
+  }
+  fillFilterOptions('filter-status', [...sets.status].sort());
+  fillFilterOptions('filter-manager', [...sets.manager].sort());
+  fillFilterOptions('filter-webform', [...sets.webform].sort());
+  fillFilterOptions('filter-utm-source', [...sets.utmSource].sort());
+  fillFilterOptions('filter-utm-medium', [...sets.utmMedium].sort());
+  fillFilterOptions('filter-utm-campaign', [...sets.utmCampaign].sort());
+  fillFilterOptions('filter-utm-content', [...sets.utmContent].sort());
+  fillFilterOptions('filter-utm-term', [...sets.utmTerm].sort());
+}
+
+function passesFilters(row, isLead) {
+  const f = {
+    search: document.getElementById('filter-search').value.trim().toLowerCase(),
+    status: document.getElementById('filter-status').value,
+    manager: document.getElementById('filter-manager').value,
+    webform: document.getElementById('filter-webform').value,
+    channel: document.getElementById('filter-channel').value,
+    period: document.getElementById('filter-period').value,
+    dateFrom: document.getElementById('filter-date-from').value,
+    dateTo: document.getElementById('filter-date-to').value,
+    utmSource: document.getElementById('filter-utm-source').value,
+    utmMedium: document.getElementById('filter-utm-medium').value,
+    utmCampaign: document.getElementById('filter-utm-campaign').value,
+    utmContent: document.getElementById('filter-utm-content').value,
+    utmTerm: document.getElementById('filter-utm-term').value,
+  };
+
+  if (f.channel && row.channel !== f.channel) return false;
+  if (f.status) {
+    const rs = isLead ? row.status_name : row.stage_name;
+    if (rs !== f.status) return false;
+  }
+  if (f.manager && row.manager !== f.manager) return false;
+  if (f.webform && row.webform_name !== f.webform) return false;
+  if (f.utmSource && row.utm_source !== f.utmSource) return false;
+  if (f.utmMedium && row.utm_medium !== f.utmMedium) return false;
+  if (f.utmCampaign && row.utm_campaign !== f.utmCampaign) return false;
+  if (f.utmContent && row.utm_content !== f.utmContent) return false;
+  if (f.utmTerm && row.utm_term !== f.utmTerm) return false;
+
+  if (f.search) {
+    const bag = [
+      row.title, row.name, row.manager,
+      row.utm_source, row.utm_medium, row.utm_campaign, row.utm_content, row.utm_term,
+      row.source_description, row.source_name, row.webform_name,
+      row.rejection_reason, row.rejection_reason_detail, row.card_comment,
+    ].filter(Boolean).join(' ').toLowerCase();
+    if (!bag.includes(f.search)) return false;
+  }
+
+  // Период
+  if (f.period === 'custom') {
+    const created = row.created ? new Date(row.created) : null;
+    if (!created) return false;
+    if (f.dateFrom) {
+      const from = new Date(f.dateFrom + 'T00:00:00');
+      if (created < from) return false;
+    }
+    if (f.dateTo) {
+      const to = new Date(f.dateTo + 'T23:59:59');
+      if (created > to) return false;
+    }
+  } else if (f.period) {
+    if (!row.created) return false;
+    const created = new Date(row.created);
+    const now = new Date();
+    if (f.period === 'today') {
+      if (created.toDateString() !== now.toDateString()) return false;
+    } else {
+      const days = parseInt(f.period, 10);
+      const diff = (now - created) / (1000 * 60 * 60 * 24);
+      if (diff > days) return false;
+    }
+  }
+  return true;
+}
+
+function sortRows(rows, sortState) {
+  const { col, dir } = sortState;
+  if (!col) return rows;
+  const factor = dir === 'asc' ? 1 : -1;
+  const arr = rows.slice();
+  arr.sort((a, b) => {
+    const av = a[col] == null ? '' : a[col];
+    const bv = b[col] == null ? '' : b[col];
+    if (typeof av === 'number' && typeof bv === 'number') return (av - bv) * factor;
+    return String(av).localeCompare(String(bv), 'ru') * factor;
+  });
+  return arr;
+}
+
+function renderSortIndicators(theadId, sortState) {
+  document.querySelectorAll(`#${theadId} th`).forEach(th => {
+    const col = th.dataset.sort;
+    th.classList.remove('sorted');
+    const arrow = th.querySelector('.arrow');
+    if (arrow) arrow.remove();
+    if (col && col === sortState.col) {
+      th.classList.add('sorted');
+      const span = document.createElement('span');
+      span.className = 'arrow';
+      span.textContent = sortState.dir === 'asc' ? '▲' : '▼';
+      th.appendChild(span);
+    }
+  });
+}
+
+function bindSorting(theadId, kind) {
+  document.querySelectorAll(`#${theadId} th[data-sort]`).forEach(th => {
+    th.addEventListener('click', () => {
+      const col = th.dataset.sort;
+      const cur = state.sort[kind];
+      if (cur.col === col) {
+        cur.dir = cur.dir === 'asc' ? 'desc' : 'asc';
+      } else {
+        cur.col = col;
+        cur.dir = (col === 'created' || col === 'opportunity') ? 'desc' : 'asc';
+      }
+      render();
+    });
+  });
+}
+
+function renderLeadTitleCell(l) {
+  const title = l.title || ('Лид #' + l.id);
+  return `<div class="lead-title-cell">
+    <a href="${escapeHtml(l.card_url)}" target="_blank" rel="noopener"><b>${escapeHtml(title)}</b></a>
+    <div class="id-line">#${l.id}${l.name ? ' · ' + escapeHtml(l.name) : ''}${l.opportunity ? ' · ' + fmtMoney(l.opportunity) : ''}</div>
+  </div>`;
+}
+
+function renderDealTitleCell(d) {
+  const title = d.title || ('Сделка #' + d.id);
+  return `<div class="lead-title-cell">
+    <a href="${escapeHtml(d.card_url)}" target="_blank" rel="noopener"><b>${escapeHtml(title)}</b></a>
+    <div class="id-line">#${d.id}</div>
+  </div>`;
+}
+
+function renderReasonCell(l) {
+  if (!l.rejection_reason && !l.rejection_reason_detail) {
+    return '<span class="muted">—</span>';
+  }
+  let html = '<div class="reason-cell">';
+  if (l.rejection_reason) html += `<b>${escapeHtml(l.rejection_reason)}</b>`;
+  if (l.rejection_reason_detail) html += `<div class="detail">${escapeHtml(l.rejection_reason_detail)}</div>`;
+  html += '</div>';
+  return html;
+}
+
+function renderSourceCell(row) {
+  const parts = [];
+  parts.push(`<div>${escapeHtml(row.source_name || row.source_id || '—')}</div>`);
+  if (row.source_description) {
+    parts.push(`<div class="muted" style="font-size:10px;font-style:italic">${escapeHtml(row.source_description)}</div>`);
+  }
+  return parts.join('');
+}
+
+function renderUtmCell(value) {
+  if (!value) return '<span class="muted">—</span>';
+  return `<div class="utm-cell">${escapeHtml(value)}</div>`;
+}
+
+function renderCommentsCell(row, kind) {
+  const cardComment = row.card_comment || '';
+  const timelineCount = row.comments_count || 0;
+  // Bitrix хранит COMMENTS лида в BBcode/HTML — рендерим как текст, не как HTML.
+  const cardHtml = cardComment
+    ? `<div class="card-comment" title="Поле «Комментарий» из карточки (клик — развернуть)">${escapeHtml(cardComment)}</div>`
+    : '';
+  const btnLabel = row.comments_cached
+    ? (timelineCount ? `${timelineCount} в таймлайне` : 'таймлайн пуст')
+    : 'загрузить таймлайн';
+  return `${cardHtml}
+    <button class="toggle-comments" data-kind="${kind}" data-id="${row.id}">${btnLabel}</button>
+    <div id="comments-${kind}-${row.id}" style="display:none"></div>`;
+}
+
+function renderTimelineList(items) {
+  if (!items || !items.length) return '<div class="muted" style="padding:6px">Комментариев нет</div>';
+  return '<div class="comments-block">' + items.map(c => `
+    <div class="comment">
+      <span class="author">${escapeHtml(c.author)}</span>
+      <span class="when">${fmtDate(c.created)}</span>
+      <div class="text">${escapeHtml(c.text)}</div>
+    </div>`).join('') + '</div>';
+}
+
+function renderLeads(leads) {
+  const tbody = document.getElementById('leads-body');
+  if (!leads.length) {
+    tbody.innerHTML = '<tr><td colspan="14" class="empty">Лидов по фильтру нет</td></tr>';
+    return;
+  }
+  tbody.innerHTML = leads.map(l => `
+    <tr>
+      <td>${fmtDate(l.created)}</td>
+      <td>${renderLeadTitleCell(l)}</td>
+      <td><span class="status ${semanticClass(l.status_semantic)}">${escapeHtml(l.status_name)}</span></td>
+      <td>${renderReasonCell(l)}</td>
+      <td>${l.channel_label ? `<span class="channel-chip">${escapeHtml(l.channel_label)}</span>` : '<span class="muted">—</span>'}</td>
+      <td>${renderSourceCell(l)}</td>
+      <td>${l.webform_name ? escapeHtml(l.webform_name) : '<span class="muted">—</span>'}</td>
+      <td>${escapeHtml(l.manager || '—')}</td>
+      <td>${renderUtmCell(l.utm_source)}</td>
+      <td>${renderUtmCell(l.utm_medium)}</td>
+      <td>${renderUtmCell(l.utm_campaign)}</td>
+      <td>${renderUtmCell(l.utm_content)}</td>
+      <td>${renderUtmCell(l.utm_term)}</td>
+      <td>${renderCommentsCell(l, 'lead')}</td>
+    </tr>
+  `).join('');
+}
+
+function renderDeals(deals) {
+  const tbody = document.getElementById('deals-body');
+  if (!deals.length) {
+    tbody.innerHTML = '<tr><td colspan="13" class="empty">Сделок по фильтру нет</td></tr>';
+    return;
+  }
+  tbody.innerHTML = deals.map(d => `
+    <tr>
+      <td>${fmtDate(d.created)}</td>
+      <td>${renderDealTitleCell(d)}</td>
+      <td><span class="status ${semanticClass(d.stage_semantic)}">${escapeHtml(d.stage_name)}</span></td>
+      <td>${fmtMoney(d.opportunity)}</td>
+      <td>${d.channel_label ? `<span class="channel-chip">${escapeHtml(d.channel_label)}</span>` : '<span class="muted">—</span>'}</td>
+      <td>${renderSourceCell(d)}</td>
+      <td>${escapeHtml(d.manager || '—')}</td>
+      <td>${renderUtmCell(d.utm_source)}</td>
+      <td>${renderUtmCell(d.utm_medium)}</td>
+      <td>${renderUtmCell(d.utm_campaign)}</td>
+      <td>${renderUtmCell(d.utm_content)}</td>
+      <td>${renderUtmCell(d.utm_term)}</td>
+      <td>${renderCommentsCell(d, 'deal')}</td>
+    </tr>
+  `).join('');
+}
+
+function render() {
+  if (!state.data) return;
+  fillChannelOptions();
+  rebuildFilterOptions();
+  const filteredLeads = state.data.leads.filter(l => passesFilters(l, true));
+  const filteredDeals = state.data.deals.filter(d => passesFilters(d, false));
+  const sortedLeads = sortRows(filteredLeads, state.sort.leads);
+  const sortedDeals = sortRows(filteredDeals, state.sort.deals);
+
+  document.getElementById('last-refresh').textContent =
+    'Обновлено: ' + (state.data.last_refresh ? fmtDate(state.data.last_refresh) : '—') +
+    ' · кэш: ' + state.data.lookback_days + ' дней' +
+    (state.data.last_error ? ' · ошибка: ' + state.data.last_error : '');
+
+  renderStats(filteredLeads, filteredDeals);
+  renderLeads(sortedLeads);
+  renderDeals(sortedDeals);
+  renderSortIndicators('leads-head', state.sort.leads);
+  renderSortIndicators('deals-head', state.sort.deals);
+}
+
+async function toggleComments(kind, id) {
+  const block = document.getElementById(`comments-${kind}-${id}`);
+  if (!block) return;
+  if (block.style.display === 'block') {
+    block.style.display = 'none';
+    return;
+  }
+  block.style.display = 'block';
+  block.innerHTML = '<div class="muted" style="padding:6px">Загружаю…</div>';
+  try {
+    const res = await fetch(`/api/comments/${kind}/${id}`, { cache: 'no-store' });
+    const data = await res.json();
+    block.innerHTML = renderTimelineList(data.comments || []);
+  } catch (e) {
+    block.innerHTML = '<div class="muted">Ошибка: ' + escapeHtml(e.message) + '</div>';
+  }
+}
+
+// ---- Wire events ----
+document.querySelectorAll('.tab').forEach(t => {
+  t.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
+    t.classList.add('active');
+    state.tab = t.dataset.tab;
+    document.getElementById('tab-leads').style.display = state.tab === 'leads' ? '' : 'none';
+    document.getElementById('tab-deals').style.display = state.tab === 'deals' ? '' : 'none';
+  });
+});
+
+[
+  'filter-search','filter-status','filter-manager','filter-webform','filter-channel',
+  'filter-period','filter-date-from','filter-date-to',
+  'filter-utm-source','filter-utm-medium','filter-utm-campaign','filter-utm-content','filter-utm-term',
+].forEach(id => {
+  const el = document.getElementById(id);
+  const handler = () => {
+    if (id === 'filter-period') {
+      document.getElementById('date-range').classList.toggle('show', el.value === 'custom');
+    }
+    render();
+  };
+  el.addEventListener('input', handler);
+  el.addEventListener('change', handler);
+});
+
+document.getElementById('reset-filters').addEventListener('click', () => {
+  ['filter-search','filter-status','filter-manager','filter-webform','filter-channel',
+   'filter-utm-source','filter-utm-medium','filter-utm-campaign','filter-utm-content','filter-utm-term',
+   'filter-date-from','filter-date-to'].forEach(id => document.getElementById(id).value = '');
+  document.getElementById('filter-period').value = '30';
+  document.getElementById('date-range').classList.remove('show');
+  render();
+});
+
+document.addEventListener('click', e => {
+  const btn = e.target.closest('.toggle-comments');
+  if (btn) { toggleComments(btn.dataset.kind, btn.dataset.id); return; }
+  const cc = e.target.closest('.card-comment');
+  if (cc) cc.classList.toggle('expanded');
+});
+
+document.getElementById('refresh-btn').addEventListener('click', async () => {
+  document.getElementById('last-refresh').textContent = 'Обновляю…';
+  await fetch('/api/refresh', { method: 'POST' });
+  await fetchData();
+});
+
+bindSorting('leads-head', 'leads');
+bindSorting('deals-head', 'deals');
+
+fetchData();
+setInterval(fetchData, REFRESH_MS);
+</script>
+</body>
+</html>
