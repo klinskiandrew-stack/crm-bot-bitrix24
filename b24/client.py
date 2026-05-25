@@ -289,9 +289,12 @@ class Bitrix24Client:
             "ID", "TITLE", "STATUS_ID", "STATUS_SEMANTIC_ID",
             "OPPORTUNITY",
             "DATE_CREATE", "ASSIGNED_BY_ID", "NAME",
-            "SOURCE_ID", "SOURCE_DESCRIPTION", "WEBFORM_ID",
+            "SOURCE_ID", "SOURCE_DESCRIPTION", "WEBFORM_ID", "COMMENTS",
             "UTM_SOURCE", "UTM_MEDIUM", "UTM_CAMPAIGN",
             "UF_CRM_1723465843", "UF_CRM_1696239286",
+            # Причина отказа (enumeration) — нужна дашборду для колонки
+            # неквала. Резолв ID→VALUE делается в dashboard/service.py.
+            "UF_CRM_1740994523382",
         ]
         if include_full_utm:
             # Extra fields for the Excel export: ad creative/keyword + phone.
