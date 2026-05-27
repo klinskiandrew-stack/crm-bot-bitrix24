@@ -1,15 +1,18 @@
 """aiohttp web-приложение для дашборда трафика.
 
 Запускается в той же event loop, что и Telegram-бот (см. main.py). По
-дефолту слушает 0.0.0.0:8001. Для доступа извне на сервере должен быть
-открыт порт 8001 (или поставлен nginx как reverse-proxy).
+дефолту слушает 0.0.0.0:8001.
 
 Маршруты:
-  GET  /                          — редирект на /dashboard/vk
-  GET  /dashboard/vk              — HTML страница
-  GET  /api/vk-leads              — JSON снапшот кэша
-  POST /api/vk-refresh            — принудительное обновление кэша
-  GET  /api/vk-comments/{kind}/{id} — комментарии конкретной карточки
+  GET  /                          — редирект на /dashboard
+  GET  /dashboard                 — HTML страница (мультиканальный)
+  GET  /dashboard/vk              — алиас (legacy)
+  GET  /api/leads                 — JSON снапшот кэша
+  GET  /api/vk-leads              — алиас (legacy)
+  POST /api/refresh               — принудительное обновление кэша
+  POST /api/vk-refresh            — алиас (legacy)
+  GET  /api/comments/{kind}/{id}  — комментарии таймлайна карточки
+  GET  /api/vk-comments/{kind}/{id} — алиас (legacy)
   GET  /healthz                   — health-check
 """
 
@@ -27,7 +30,7 @@ from dashboard.service import get_service
 logger = structlog.get_logger()
 
 TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
-DASHBOARD_HTML_PATH = TEMPLATES_DIR / "vk.html"
+DASHBOARD_HTML_PATH = TEMPLATES_DIR / "dashboard.html"
 
 # Опциональный токен — если задан DASHBOARD_TOKEN в .env, требуем
 # ?token=... либо заголовок X-Dashboard-Token. Пустая строка = открыто.
@@ -48,19 +51,19 @@ def _check_token(request: web.Request) -> Optional[web.Response]:
 
 
 async def index(request: web.Request) -> web.Response:
-    raise web.HTTPFound("/dashboard/vk")
+    raise web.HTTPFound("/dashboard")
 
 
-async def dashboard_vk(request: web.Request) -> web.Response:
+async def dashboard_page(request: web.Request) -> web.Response:
     err = _check_token(request)
     if err is not None:
         return err
     if not DASHBOARD_HTML_PATH.exists():
-        return web.Response(text="vk.html template missing", status=500)
+        return web.Response(text="dashboard.html template missing", status=500)
     return web.FileResponse(DASHBOARD_HTML_PATH)
 
 
-async def api_vk_leads(request: web.Request) -> web.Response:
+async def api_leads(request: web.Request) -> web.Response:
     err = _check_token(request)
     if err is not None:
         return err
@@ -68,7 +71,7 @@ async def api_vk_leads(request: web.Request) -> web.Response:
     return web.json_response(svc.get_snapshot())
 
 
-async def api_vk_refresh(request: web.Request) -> web.Response:
+async def api_refresh(request: web.Request) -> web.Response:
     err = _check_token(request)
     if err is not None:
         return err
@@ -77,7 +80,7 @@ async def api_vk_refresh(request: web.Request) -> web.Response:
     return web.json_response({"ok": True, "last_refresh": svc.get_snapshot()["last_refresh"]})
 
 
-async def api_vk_comments(request: web.Request) -> web.Response:
+async def api_comments(request: web.Request) -> web.Response:
     err = _check_token(request)
     if err is not None:
         return err
@@ -108,10 +111,19 @@ async def healthz(request: web.Request) -> web.Response:
 def build_app() -> web.Application:
     app = web.Application()
     app.router.add_get("/", index)
-    app.router.add_get("/dashboard/vk", dashboard_vk)
-    app.router.add_get("/api/vk-leads", api_vk_leads)
-    app.router.add_post("/api/vk-refresh", api_vk_refresh)
-    app.router.add_get("/api/vk-comments/{kind}/{id}", api_vk_comments)
+
+    # Новые канонические пути
+    app.router.add_get("/dashboard", dashboard_page)
+    app.router.add_get("/api/leads", api_leads)
+    app.router.add_post("/api/refresh", api_refresh)
+    app.router.add_get("/api/comments/{kind}/{id}", api_comments)
+
+    # Legacy-алиасы
+    app.router.add_get("/dashboard/vk", dashboard_page)
+    app.router.add_get("/api/vk-leads", api_leads)
+    app.router.add_post("/api/vk-refresh", api_refresh)
+    app.router.add_get("/api/vk-comments/{kind}/{id}", api_comments)
+
     app.router.add_get("/healthz", healthz)
     return app
 
@@ -121,12 +133,7 @@ async def start_dashboard_server(
     port: int = 8001,
     refresh_minutes: int = 5,
 ) -> tuple[web.AppRunner, AsyncIOScheduler]:
-    """Поднимает HTTP-сервер и фоновый job обновления кэша.
-
-    Возвращает (runner, scheduler) — main.py должен закрыть оба при
-    остановке. Первичный refresh делается синхронно, чтобы UI после
-    запуска уже отдавал данные.
-    """
+    """Поднимает HTTP-сервер и фоновый job обновления кэша."""
     app = build_app()
     runner = web.AppRunner(app)
     await runner.setup()
@@ -137,11 +144,10 @@ async def start_dashboard_server(
         host=host,
         port=port,
         auth=bool(ACCESS_TOKEN),
-        url=f"http://{host}:{port}/dashboard/vk",
+        url=f"http://{host}:{port}/dashboard",
     )
 
     svc = get_service()
-    # Первичный фетч — синхронно, чтобы /api/vk-leads сразу отдавал данные.
     try:
         await svc.refresh()
     except Exception:
@@ -151,7 +157,7 @@ async def start_dashboard_server(
     scheduler.add_job(
         svc.refresh,
         IntervalTrigger(minutes=refresh_minutes),
-        id="vk_dashboard_refresh",
+        id="dashboard_refresh",
         misfire_grace_time=300,
         coalesce=True,
         max_instances=1,
