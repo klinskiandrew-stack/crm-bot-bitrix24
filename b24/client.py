@@ -1,10 +1,18 @@
 import aiohttp
+import asyncio
 import json
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional
 import structlog
 from config import settings
 from b24.rate_limiter import RateLimiter
+
+# Bitrix server occasionally drops TCP mid-request (Connection reset by
+# peer, Server disconnected, request timeout). Retry transient network
+# errors with a short back-off — same idea as in deepseek_client.
+_NET_RETRY_ATTEMPTS = 3
+_NET_RETRY_BASE_DELAY = 0.7
+_NET_RETRY_EXCEPTIONS = (aiohttp.ClientError, asyncio.TimeoutError)
 
 logger = structlog.get_logger()
 
@@ -68,28 +76,41 @@ class Bitrix24Client:
     async def _call_get(self, method: str, params: Dict[str, Any] = None) -> Dict[str, Any]:
         """GET call — used for single-entity methods (crm.lead.get, crm.deal.get)
         where POST+JSON sometimes fails with 'ID is not defined or invalid'.
-        Supports nested params via Bitrix24's filter[KEY]=value notation."""
+        Supports nested params via Bitrix24's filter[KEY]=value notation.
+        Retries on transient network errors (см. _NET_RETRY_*)."""
         await self.rate_limiter.acquire()
         await self._ensure_session()
 
         url = f"{self.webhook_url}{method}"
-        try:
-            async with self._session.get(url, params=params or {}, timeout=aiohttp.ClientTimeout(total=30)) as resp:
-                text = await resp.text()
-                try:
-                    response = json.loads(text)
-                except json.JSONDecodeError:
-                    logger.error("Bitrix24 non-JSON response", method=method, status=resp.status, body=text[:200])
-                    return {"error": f"Non-JSON response (status={resp.status})"}
+        last_err: Optional[str] = None
+        for attempt in range(_NET_RETRY_ATTEMPTS):
+            try:
+                async with self._session.get(url, params=params or {}, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+                    text = await resp.text()
+                    try:
+                        response = json.loads(text)
+                    except json.JSONDecodeError:
+                        logger.error("Bitrix24 non-JSON response", method=method, status=resp.status, body=text[:200])
+                        return {"error": f"Non-JSON response (status={resp.status})"}
 
-                if "error" in response or "error_description" in response:
-                    err = response.get("error_description") or response.get("error", "Unknown error")
-                    logger.error("Bitrix24 API error", method=method, error=err)
-                    return {"error": err}
-                return response
-        except Exception as e:
-            logger.error("Bitrix24 GET failed", method=method, error=str(e))
-            return {"error": str(e)}
+                    if "error" in response or "error_description" in response:
+                        err = response.get("error_description") or response.get("error", "Unknown error")
+                        logger.error("Bitrix24 API error", method=method, error=err)
+                        return {"error": err}
+                    return response
+            except _NET_RETRY_EXCEPTIONS as e:
+                last_err = str(e)
+                if attempt < _NET_RETRY_ATTEMPTS - 1:
+                    delay = _NET_RETRY_BASE_DELAY * (attempt + 1)
+                    logger.warning("Bitrix24 GET network error, retrying", method=method, attempt=attempt + 1, error=last_err, delay=delay)
+                    await asyncio.sleep(delay)
+                    continue
+                logger.error("Bitrix24 GET failed after retries", method=method, error=last_err)
+                return {"error": last_err}
+            except Exception as e:
+                logger.error("Bitrix24 GET failed", method=method, error=str(e))
+                return {"error": str(e)}
+        return {"error": last_err or "Bitrix24 GET: failed"}
 
     async def _call(
         self,
@@ -97,7 +118,8 @@ class Bitrix24Client:
         params: Dict[str, Any] = None,
         start: int = 0
     ) -> Dict[str, Any]:
-        """Call Bitrix24 API method with rate limiting. Returns full response dict."""
+        """Call Bitrix24 API method with rate limiting. Returns full response dict.
+        Retries on transient network errors (Connection reset, Server disconnected, timeout)."""
         await self.rate_limiter.acquire()
         await self._ensure_session()
 
@@ -105,19 +127,31 @@ class Bitrix24Client:
         data = dict(params or {})
         data["start"] = start
 
-        try:
-            async with self._session.post(url, json=data) as resp:
-                response = await resp.json()
+        last_err: Optional[str] = None
+        for attempt in range(_NET_RETRY_ATTEMPTS):
+            try:
+                async with self._session.post(url, json=data, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+                    response = await resp.json()
 
-                if "error" in response or "error_description" in response:
-                    error_msg = response.get("error_description") or response.get("error", "Unknown error")
-                    logger.error("Bitrix24 API error", method=method, error=error_msg, response=str(response)[:300])
-                    return {"error": error_msg}
+                    if "error" in response or "error_description" in response:
+                        error_msg = response.get("error_description") or response.get("error", "Unknown error")
+                        logger.error("Bitrix24 API error", method=method, error=error_msg, response=str(response)[:300])
+                        return {"error": error_msg}
 
-                return response
-        except Exception as e:
-            logger.error("Bitrix24 request failed", method=method, error=str(e))
-            return {"error": str(e)}
+                    return response
+            except _NET_RETRY_EXCEPTIONS as e:
+                last_err = str(e)
+                if attempt < _NET_RETRY_ATTEMPTS - 1:
+                    delay = _NET_RETRY_BASE_DELAY * (attempt + 1)
+                    logger.warning("Bitrix24 network error, retrying", method=method, attempt=attempt + 1, error=last_err, delay=delay)
+                    await asyncio.sleep(delay)
+                    continue
+                logger.error("Bitrix24 request failed after retries", method=method, error=last_err)
+                return {"error": last_err}
+            except Exception as e:
+                logger.error("Bitrix24 request failed", method=method, error=str(e))
+                return {"error": str(e)}
+        return {"error": last_err or "Bitrix24: failed"}
 
     async def _paginate(
         self,
@@ -179,10 +213,19 @@ class Bitrix24Client:
         filter_by_title_contains: Optional[str] = None,
         filter_by_utm_source: Optional[str] = None,
         filter_by_direction_ids: Optional[List[int]] = None,
+        filter_by_moved_before: Optional[str] = None,
+        filter_by_moved_after: Optional[str] = None,
+        only_open: bool = False,
         limit: int = 50,
         return_total: bool = False,
     ):
         """Get deals for assigned users.
+
+        filter_by_moved_before / filter_by_moved_after / only_open power
+        the sales-intelligence stuck-deal detector: open deals whose stage
+        hasn't changed within a date window (MOVED_TIME is set only on a
+        stage change, so it's robust against unrelated edits). Bounding
+        both ends keeps the result set small and complete (no truncation).
 
         Returns a list of deals by default. With return_total=True returns
         {"items": [...], "total": N} — N is Bitrix's count of ALL matching
@@ -205,11 +248,12 @@ class Bitrix24Client:
             "select": [
                 "ID", "TITLE", "STAGE_ID", "STAGE_SEMANTIC_ID", "IS_WON",
                 "OPPORTUNITY", "CURRENCY_ID", "CLOSED",
-                "DATE_CREATE", "BEGINDATE", "CLOSEDATE",
+                "DATE_CREATE", "DATE_MODIFY", "MOVED_TIME", "LAST_ACTIVITY_TIME",
+                "BEGINDATE", "CLOSEDATE",
                 "ASSIGNED_BY_ID", "CONTACT_ID", "COMPANY_ID",
                 "TYPE_ID", "CATEGORY_ID", "SOURCE_ID", "SOURCE_DESCRIPTION",
                 "UTM_SOURCE", "UTM_MEDIUM", "UTM_CAMPAIGN", "UTM_CONTENT", "UTM_TERM",
-                "UF_CRM_651D2BA47419A", "UF_CRM_67C71B6E2224F",
+                "UF_CRM_651D2BA47419A", "UF_CRM_67C71B6E2224F", "UF_CRM_1741083174473",
             ]
         }
 
@@ -230,6 +274,12 @@ class Bitrix24Client:
         if filter_by_direction_ids:
             # Bitrix accepts arrays for UF enum filter — matches any of given IDs.
             params["filter"]["UF_CRM_651D2BA47419A"] = filter_by_direction_ids
+        if only_open:
+            params["filter"]["CLOSED"] = "N"
+        if filter_by_moved_before:
+            params["filter"]["<=MOVED_TIME"] = filter_by_moved_before
+        if filter_by_moved_after:
+            params["filter"][">=MOVED_TIME"] = filter_by_moved_after
 
         items, total = await self._paginate("crm.deal.list", params, limit=limit, max_items=limit)
         if isinstance(items, dict) and "error" in items:
@@ -256,11 +306,18 @@ class Bitrix24Client:
         filter_by_title_contains: Optional[str] = None,
         filter_by_utm_source: Optional[str] = None,
         filter_by_direction_ids: Optional[List[int]] = None,
+        filter_by_modified_before: Optional[str] = None,
+        filter_by_modified_after: Optional[str] = None,
         include_full_utm: bool = False,
         limit: int = 50,
         return_total: bool = False,
     ):
         """Get leads for assigned users.
+
+        filter_by_modified_before / filter_by_modified_after (DATE_MODIFY
+        range) power the sales-intelligence cold-lead detector: active
+        leads nobody has touched within a date window. Bounding both ends
+        keeps the result set small and complete (no truncation).
 
         Returns a list of leads by default. With return_total=True returns
         {"items": [...], "total": N} — N is Bitrix's count of ALL matching
@@ -288,7 +345,7 @@ class Bitrix24Client:
         select = [
             "ID", "TITLE", "STATUS_ID", "STATUS_SEMANTIC_ID",
             "OPPORTUNITY",
-            "DATE_CREATE", "ASSIGNED_BY_ID", "NAME",
+            "DATE_CREATE", "DATE_MODIFY", "ASSIGNED_BY_ID", "NAME",
             "SOURCE_ID", "SOURCE_DESCRIPTION", "WEBFORM_ID",
             "UTM_SOURCE", "UTM_MEDIUM", "UTM_CAMPAIGN",
             "UF_CRM_1723465843", "UF_CRM_1696239286",
@@ -318,6 +375,10 @@ class Bitrix24Client:
             params["filter"]["UTM_SOURCE"] = filter_by_utm_source
         if filter_by_direction_ids:
             params["filter"]["UF_CRM_1696239286"] = filter_by_direction_ids
+        if filter_by_modified_before:
+            params["filter"]["<=DATE_MODIFY"] = filter_by_modified_before
+        if filter_by_modified_after:
+            params["filter"][">=DATE_MODIFY"] = filter_by_modified_after
 
         items, total = await self._paginate("crm.lead.list", params, limit=limit, max_items=limit)
         if isinstance(items, dict) and "error" in items:
@@ -381,6 +442,108 @@ class Bitrix24Client:
 
         items, _total = await self._paginate("crm.company.list", params, limit=limit, max_items=limit)
         return items
+
+    async def get_voximplant_stats(
+        self,
+        date_from: str,
+        date_to: str,
+        user_ids: Optional[List[int]] = None,
+        max_items: int = 5000,
+    ) -> List[Dict[str, Any]]:
+        """Voximplant call statistics — paginated.
+
+        date_from / date_to: ISO timestamps with TZ
+        (e.g. '2026-05-26T00:00:00+03:00'). date_from inclusive,
+        date_to exclusive. Each call carries PORTAL_USER_ID,
+        CALL_DURATION (seconds, as string), CALL_FAILED_CODE
+        (200 = success), CALL_TYPE (1=incoming, 2=outgoing), etc.
+        """
+        params = {
+            "FILTER": {
+                ">=CALL_START_DATE": date_from,
+                "<CALL_START_DATE": date_to,
+            },
+            "SORT": "CALL_START_DATE",
+            "ORDER": "ASC",
+        }
+        if user_ids:
+            params["FILTER"]["PORTAL_USER_ID"] = list(user_ids)
+
+        all_calls: List[Dict[str, Any]] = []
+        start = 0
+        while len(all_calls) < max_items:
+            resp = await self._call("voximplant.statistic.get", params, start=start)
+            if isinstance(resp, dict) and "error" in resp:
+                logger.error("voximplant.statistic.get failed", error=resp["error"])
+                return all_calls
+            batch = resp.get("result", []) if isinstance(resp, dict) else []
+            if not batch:
+                break
+            all_calls.extend(batch)
+            next_start = resp.get("next") if isinstance(resp, dict) else None
+            if next_start is None or len(batch) < 50:
+                break
+            start = next_start
+        return all_calls[:max_items]
+
+    async def get_call_activities(
+        self, owner_id: int, owner_type_id: int = 1, limit: int = 50,
+    ) -> List[Dict[str, Any]]:
+        """Call activities (TYPE_ID=2) on a lead (owner_type=1) or deal (=2).
+
+        Returns each activity with FILES — the array of attached recordings
+        from the telephony provider (Mango / Bitrix telephony, etc.). Each
+        FILES entry is {id, url}; the url is the legacy crm_show_file.php
+        link and isn't usable for download — use disk.file.get(id) to get a
+        signed DOWNLOAD_URL that the webhook can actually fetch.
+        """
+        resp = await self._call("crm.activity.list", {
+            "filter": {
+                "TYPE_ID": 2,
+                "OWNER_ID": owner_id,
+                "OWNER_TYPE_ID": owner_type_id,
+            },
+            "select": [
+                "ID", "SUBJECT", "TYPE_ID", "DIRECTION", "STATUS",
+                "PROVIDER_ID", "PROVIDER_TYPE_ID",
+                "FILES", "CREATED", "START_TIME", "END_TIME",
+                "RESPONSIBLE_ID", "OWNER_ID", "OWNER_TYPE_ID",
+                "DESCRIPTION",
+            ],
+            "order": {"ID": "DESC"},
+        })
+        items = resp.get("result", []) if isinstance(resp, dict) else []
+        return items[:limit] if isinstance(items, list) else []
+
+    async def download_disk_file(self, file_id: int) -> Optional[bytes]:
+        """Download a Bitrix Disk file's bytes via disk.file.get → signed URL.
+
+        The crm_show_file.php links on CRM activities require a browser
+        session and are not webhook-fetchable. disk.file.get exposes a
+        DOWNLOAD_URL that the webhook can actually pull. Returns the file
+        body on success, or None on any error.
+        """
+        meta = await self._call("disk.file.get", {"id": file_id})
+        if isinstance(meta, dict) and "error" in meta:
+            logger.error("disk.file.get failed", file_id=file_id, error=meta.get("error"))
+            return None
+        url = (meta.get("result") or {}).get("DOWNLOAD_URL")
+        if not url:
+            logger.error("disk.file.get returned no DOWNLOAD_URL", file_id=file_id)
+            return None
+        await self._ensure_session()
+        try:
+            async with self._session.get(
+                url, timeout=aiohttp.ClientTimeout(total=120),
+            ) as r:
+                if r.status != 200:
+                    logger.error("Disk file download failed",
+                                 file_id=file_id, status=r.status)
+                    return None
+                return await r.read()
+        except Exception as e:
+            logger.error("Disk file download exception", file_id=file_id, error=str(e))
+            return None
 
     async def get_activities(
         self,
