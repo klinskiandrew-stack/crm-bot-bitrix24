@@ -16,11 +16,12 @@ from ai.orchestrator import Orchestrator
 
 def _active_model_name() -> str:
     """Real model behind the LLM provider — used as audit fallback when
-    the upstream response didn't carry a model name (e.g. exception path)."""
-    provider = (settings.llm_provider or "kie").lower()
-    if provider == "deepseek":
-        return settings.deepseek_model or "deepseek-v4-flash"
-    return "claude-sonnet-4-6"
+    the upstream response didn't carry a model name (e.g. exception path).
+    Bot runs exclusively on DeepSeek; 'kie' is an explicit opt-in only."""
+    provider = (settings.llm_provider or "deepseek").lower()
+    if provider == "kie":
+        return "claude-sonnet-4-6"
+    return settings.deepseek_model or "deepseek-v4-flash"
 
 logger = structlog.get_logger()
 
@@ -129,6 +130,14 @@ _CODE_INLINE_RE = re.compile(
     r"\s*\(\s*(UC_[A-Z0-9_]+|C\d+:[A-Z0-9_:]+)\s*-\s*",
     flags=re.IGNORECASE,
 )
+# A whole parenthetical that leaks a tool/field name into the answer,
+# e.g. "(total_in_crm из get_deals)", "(DATE_CREATE с 2026-05-01)".
+_TECH_PAREN_RE = re.compile(
+    r"\s*\([^)]*\b(?:total_in_crm|year_created|DATE_CREATE|DATE_MODIFY|"
+    r"MOVED_TIME|STAGE_ID|STATUS_ID|LEAD_ID|get_deals|get_leads|"
+    r"count_deals_passed_stage|deals_summary|leads_summary)\b[^)]*\)",
+    flags=re.IGNORECASE,
+)
 
 
 def _sanitize_answer(text: str) -> str:
@@ -148,6 +157,8 @@ def _sanitize_answer(text: str) -> str:
     text = _CODE_PAREN_RE.sub("", text)
     # 3. Inline "(UC_X - Название)" -> "(Название"
     text = _CODE_INLINE_RE.sub(" (", text)
+    # 4. Parentheticals leaking tool/field names — "(total_in_crm из get_deals)"
+    text = _TECH_PAREN_RE.sub("", text)
     return text.strip()
 
 
@@ -162,6 +173,12 @@ _MD_TABLE_RE = re.compile(
     r"[ \t]*(\|[\s\-:|]+\|)[ \t]*\n"            # separator
     r"((?:[ \t]*\|[^\n]+\|[ \t]*\n?)+)"          # data rows
 )
+
+# Markdown headings (#, ##, ###…) — Telegram renders no headings, so the
+# `#` symbols leak as plain text. Convert the whole line to bold.
+_MD_HEADING_RE = re.compile(r"(?m)^[ \t]*#{1,6}[ \t]+(.+?)[ \t]*$")
+# Horizontal rules (---, ***, ___) — Telegram renders none; drop the line.
+_MD_HR_RE = re.compile(r"(?m)^[ \t]*(?:-{3,}|\*{3,}|_{3,})[ \t]*$")
 
 
 def _split_table_row(row: str) -> list[str]:
@@ -209,6 +226,15 @@ def _markdown_to_telegram_html(text: str) -> str:
     """
     # 1. Markdown tables -> bullet list (Telegram doesn't render tables)
     text = _MD_TABLE_RE.sub(_table_to_bullets, text)
+
+    # 1b. Headings (#, ##, ###) -> bold line; Telegram has no headings.
+    #     Strip any inner ** first so bold markers don't end up nested.
+    text = _MD_HEADING_RE.sub(
+        lambda m: "**" + m.group(1).replace("**", "").replace("__", "").strip() + "**",
+        text,
+    )
+    # 1c. Horizontal rules (---, ***, ___) -> drop; Telegram has no HR.
+    text = _MD_HR_RE.sub("", text)
 
     # 2. Stash markdown links before escape
     links = []

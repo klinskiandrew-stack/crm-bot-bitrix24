@@ -12,12 +12,14 @@ class Settings(BaseSettings):
     # Bitrix24
     b24_webhook_url: str
 
-    # Kie.ai
-    kie_api_key: str
+    # Kie.ai — НЕ используется (бот работает исключительно через DeepSeek).
+    # Поля оставлены опциональными на случай возврата к Kie; пустой ключ
+    # больше не мешает боту запуститься.
+    kie_api_key: str = ""
     kie_base_url: str = "https://api.kie.ai/claude"
     kie_proxy_url: str = ""
 
-    # DeepSeek (optional, used when llm_provider=deepseek)
+    # DeepSeek — основной (и единственный) LLM-провайдер бота.
     deepseek_api_key: str = ""
     deepseek_base_url: str = "https://api.deepseek.com"
     deepseek_model: str = "deepseek-chat"
@@ -83,8 +85,29 @@ class Settings(BaseSettings):
     # the lead-reports STT (faster-whisper). Toggle off to disable.
     voice_commands_enabled: bool = True
 
-    # Which provider to use for LLM calls: "kie" or "deepseek"
-    llm_provider: str = "kie"
+    # Sales intelligence — proactively detects stuck / forgotten deals and
+    # leads, plus a weekly "sales opportunities" digest into the РОП chat.
+    sales_intel_enabled: bool = True
+    sales_digest_chat_id: int = 0           # РОП chat, e.g. -5122320352
+    sales_digest_weekday: str = "mon"       # APScheduler day_of_week
+    sales_digest_hour: int = 9
+    sales_digest_minute: int = 30
+    # Ежедневный отчёт «работа менеджеров за вчера» → чат РОПа в 09:00 МСК.
+    manager_daily_enabled: bool = True
+    manager_daily_chat_id: int = 0          # РОП chat, e.g. -5122320352
+    manager_daily_hour: int = 9
+    manager_daily_minute: int = 0
+
+    stuck_deal_days: int = 14               # open deal not moved this long
+    stuck_deal_max_days: int = 90           # older than this = dead, skip
+    cold_lead_days: int = 2                 # active lead untouched this long
+    measurement_followup_days: int = 7      # замер done, deal not progressed
+    new_lead_react_hours: int = 4           # new lead with no first touch
+
+    # LLM-провайдер. Бот работает исключительно через DeepSeek — это
+    # значение по умолчанию. "kie" оставлен только как явный аварийный
+    # переключатель через .env, в норме не используется.
+    llm_provider: str = "deepseek"
 
     # Database
     database_path: str = "./data/bot.sqlite"
