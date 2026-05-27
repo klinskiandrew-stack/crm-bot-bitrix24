@@ -273,6 +273,23 @@ async def debug_command(message: types.Message, user_context: dict = None):
         await message.answer(f"Ошибка: {e}")
 
 
+@router.message(Command("diagnose"))
+async def diagnose_command(message: types.Message, user_context: dict = None):
+    """On-demand AI debug review for the last 24h (same as the 08:30 cron)."""
+    if not is_admin(user_context):
+        await message.answer("Доступ запрещен.")
+        return
+    from reports.error_digest import build_error_diagnosis
+    placeholder = await message.answer("🛠 Собираю разбор — audit_log + journalctl → DeepSeek…")
+    try:
+        text = await build_error_diagnosis(hours=24)
+        await placeholder.edit_text(text, parse_mode=ParseMode.HTML)
+        logger.info("Diagnose run", admin_id=user_context["telegram_id"], chars=len(text))
+    except Exception as e:
+        logger.error("Diagnose failed", error=str(e))
+        await placeholder.edit_text(f"Ошибка: {e}")
+
+
 @router.message(Command("transcribe_pending"))
 async def transcribe_pending_command(message: types.Message, user_context: dict = None):
     """Transcribe all not-yet-processed lead recordings (backfill)."""

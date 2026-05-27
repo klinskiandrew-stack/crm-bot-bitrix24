@@ -124,13 +124,13 @@ async def _run_crm_refresh() -> None:
         logger.error("CRM refresh job failed", error=str(e))
 
 
-async def _run_error_digest(bot: Bot) -> None:
-    """Daily self-monitoring digest of bot failures, sent to the admin."""
+async def _run_error_diagnosis(bot: Bot) -> None:
+    """Daily AI-powered debug review — audit_log + journalctl → DeepSeek → admin."""
     try:
-        from reports.error_digest import send_error_digest
-        await send_error_digest(bot, hours=24)
+        from reports.error_digest import send_error_diagnosis
+        await send_error_diagnosis(bot, hours=24)
     except Exception as e:
-        logger.error("Error digest job failed", error=str(e))
+        logger.error("Error diagnosis job failed", error=str(e))
 
 
 async def _run_lead_retry() -> None:
@@ -143,6 +143,24 @@ async def _run_lead_retry() -> None:
             logger.info("Hourly lead retry done", **result)
     except Exception as e:
         logger.error("Hourly lead retry failed", error=str(e))
+
+
+async def _run_sales_digest(bot: Bot) -> None:
+    """Weekly 'sales opportunities' digest — stuck deals + forgotten leads."""
+    try:
+        from sales_intel.digest import send_weekly_digest
+        await send_weekly_digest(bot)
+    except Exception as e:
+        logger.error("Sales digest job failed", error=str(e))
+
+
+async def _run_manager_daily(bot: Bot) -> None:
+    """Daily manager-activity report → РОП chat at 09:00 MSK."""
+    try:
+        from reports.manager_daily import send_manager_daily
+        await send_manager_daily(bot)
+    except Exception as e:
+        logger.error("Manager daily report job failed", error=str(e))
 
 
 def start_report_scheduler(bot: Bot) -> Optional[AsyncIOScheduler]:
@@ -186,22 +204,55 @@ def start_report_scheduler(bot: Bot) -> Optional[AsyncIOScheduler]:
         id="crm_refresh",
         misfire_grace_time=3600,
     )
-    # Daily self-monitoring digest of bot failures → admin.
+    # Daily AI-powered debug review → admin DM at 08:30 MSK.
+    # audit_log за сутки + journalctl → DeepSeek → причины + рекомендации.
     scheduler.add_job(
-        _run_error_digest,
-        CronTrigger(hour=hour, minute=10, timezone=tz),
+        _run_error_diagnosis,
+        CronTrigger(hour=8, minute=30, timezone=tz),
         args=[bot],
-        id="error_digest",
+        id="error_diagnosis",
         misfire_grace_time=3600,
     )
-    # Hourly retry for pending lead recordings (telephony publishes the
-    # MP3 with a delay — a fresh call 404s on the first attempt).
+    # Retry pending lead recordings every 5 minutes. Telephony
+    # (lk.ccp.center) publishes the MP3 with a delay — a fresh call 404s
+    # on the first attempt — so the bot re-checks the link frequently
+    # and picks the recording up within minutes of it appearing, instead
+    # of waiting up to an hour. An empty queue makes the run a no-op.
     scheduler.add_job(
         _run_lead_retry,
-        CronTrigger(minute=35, timezone=tz),
+        CronTrigger(minute="*/5", timezone=tz),
         id="lead_retry",
-        misfire_grace_time=1800,
+        misfire_grace_time=240,
     )
+    # Daily "manager activity" report → РОП chat at 09:00 MSK.
+    if settings.manager_daily_enabled and settings.manager_daily_chat_id:
+        scheduler.add_job(
+            _run_manager_daily,
+            CronTrigger(
+                hour=settings.manager_daily_hour,
+                minute=settings.manager_daily_minute,
+                timezone=tz,
+            ),
+            args=[bot],
+            id="manager_daily",
+            misfire_grace_time=3600,
+        )
+
+    # Weekly "sales opportunities" digest → РОП chat: stuck deals,
+    # measurements without follow-up, forgotten leads.
+    if settings.sales_intel_enabled and settings.sales_digest_chat_id:
+        scheduler.add_job(
+            _run_sales_digest,
+            CronTrigger(
+                day_of_week=settings.sales_digest_weekday,
+                hour=settings.sales_digest_hour,
+                minute=settings.sales_digest_minute,
+                timezone=tz,
+            ),
+            args=[bot],
+            id="sales_digest",
+            misfire_grace_time=3600,
+        )
 
     scheduler.start()
     logger.info(
