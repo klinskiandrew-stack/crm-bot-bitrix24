@@ -1,0 +1,632 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Гроу — история одного эксперимента · Growzone</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@500;600;700&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --dark:#1F3220; --green:#2E5A2E; --leaf:#6C8F4A;
+    --bark:#8C6A3A; --gold:#CBA66A; --cream:#EAE7DF;
+    --paper:#F4F2EC; --ink:#2A2A24;
+    --serif:'Playfair Display',Georgia,serif;
+    --sans:'Manrope','Segoe UI',system-ui,sans-serif;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{height:100%}
+  body{font-family:var(--sans);background:var(--dark);color:var(--ink);overflow:hidden}
+
+  .deck{position:fixed;inset:0}
+  .slide{
+    position:absolute;inset:0;display:flex;flex-direction:column;
+    justify-content:center;align-items:center;padding:6vh 8vw;
+    opacity:0;visibility:hidden;
+    transition:opacity .5s ease,visibility .5s;background:var(--paper)}
+  .slide.active{opacity:1;visibility:visible}
+  .slide.dark{background:var(--dark);color:var(--cream)}
+  .slide-inner{width:100%;max-width:1080px;
+    transform:translateY(18px);opacity:0;
+    transition:transform .55s ease .12s,opacity .55s ease .12s}
+  .slide.active .slide-inner{transform:translateY(0);opacity:1}
+
+  .eyebrow{font-size:.78rem;letter-spacing:.3em;text-transform:uppercase;
+    color:var(--bark);font-weight:700;margin-bottom:1.3rem}
+  .slide.dark .eyebrow{color:var(--gold)}
+  h1{font-family:var(--serif);font-weight:700;font-size:clamp(3rem,7vw,5.8rem);
+    line-height:1.02;color:var(--dark)}
+  .slide.dark h1{color:var(--cream)}
+  h2{font-family:var(--serif);font-weight:600;font-size:clamp(1.9rem,3.6vw,3.1rem);
+    line-height:1.14;color:var(--dark);margin-bottom:1.2rem}
+  .slide.dark h2{color:var(--cream)}
+  p.lead{font-size:clamp(1.02rem,1.45vw,1.32rem);line-height:1.62;
+    color:#4a4a40;max-width:52ch}
+  .slide.dark p.lead{color:#cdd2c4}
+  p.lead+p.lead{margin-top:1rem}
+  .accent{color:var(--green)}
+  .slide.dark .accent{color:var(--gold)}
+  .big-quote{font-family:var(--serif);font-size:clamp(1.5rem,2.4vw,2.2rem);
+    line-height:1.3;color:var(--green);margin-top:1.6rem;font-weight:600}
+  .slide.dark .big-quote{color:var(--gold)}
+
+  .leaf{width:46px;height:46px;flex:none}
+  .leaf path,.leaf line{stroke:var(--gold);stroke-width:4;fill:none;stroke-linecap:round}
+
+  /* cover / final */
+  .cover{display:grid;grid-template-columns:1.05fr .95fr;gap:4vw;
+    align-items:center;width:100%;max-width:1120px}
+  .cover-art{position:relative;display:flex;justify-content:center}
+  .cover-art img{width:100%;max-width:430px;
+    filter:drop-shadow(0 30px 50px rgba(0,0,0,.45))}
+  .cover-art .halo{position:absolute;inset:-6% -4% auto;height:0;
+    padding-bottom:96%;border:1px solid rgba(203,166,106,.4);border-radius:50%;z-index:0}
+  .cover-fallback{width:300px;height:380px;border:1px dashed rgba(203,166,106,.5);
+    border-radius:18px;display:flex;flex-direction:column;align-items:center;
+    justify-content:center;gap:12px;color:#9aa08c;text-align:center;
+    font-size:.85rem;padding:24px}
+  .brandline{display:flex;align-items:center;gap:14px;margin-top:2.3rem}
+  .brandline .bz{font-family:var(--serif);letter-spacing:.14em;
+    font-size:1.05rem;color:var(--cream)}
+  .brandline small{color:var(--gold);letter-spacing:.16em;
+    text-transform:uppercase;font-size:.6rem}
+
+  .num{font-family:var(--serif);font-size:clamp(2.6rem,5vw,4rem);
+    color:var(--gold);line-height:1;font-weight:700;margin-bottom:.4rem}
+  .row{display:grid;grid-template-columns:1fr 1fr;gap:3.2vw;
+    align-items:center;width:100%}
+  .stack>*+*{margin-top:1rem}
+
+  ul.benefits{list-style:none;margin-top:1.5rem;display:grid;gap:.8rem}
+  ul.benefits li{position:relative;padding-left:1.9rem;font-size:1.02rem;
+    line-height:1.5;color:#43433a}
+  .slide.dark ul.benefits li{color:#d3d8ca}
+  ul.benefits li::before{content:"";position:absolute;left:0;top:.3em;
+    width:1rem;height:1rem;background:no-repeat center/contain
+    url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C8 7 8 17 12 22C16 17 16 7 12 2Z" fill="none" stroke="%23CBA66A" stroke-width="2.4"/><line x1="12" y1="4" x2="12" y2="20" stroke="%23CBA66A" stroke-width="2.4"/></svg>')}
+
+  /* chat */
+  .chat{background:#fff;border:1px solid #e3e0d4;border-radius:20px;
+    padding:22px;display:flex;flex-direction:column;gap:12px;
+    box-shadow:0 24px 50px -28px rgba(31,50,32,.45)}
+  .slide.dark .chat{background:#26412a;border-color:#395b3c}
+  .bubble{max-width:90%;padding:12px 16px;border-radius:16px;
+    font-size:.97rem;line-height:1.5}
+  .bubble.user{align-self:flex-end;background:var(--leaf);color:#fff;
+    border-bottom-right-radius:5px}
+  .bubble.bot{align-self:flex-start;background:var(--cream);color:#2f3a2c;
+    border-bottom-left-radius:5px}
+  .slide.dark .bubble.bot{background:#1f3320;color:#dfe4d6}
+  .bubble .who{display:block;font-size:.64rem;letter-spacing:.13em;
+    text-transform:uppercase;opacity:.6;margin-bottom:4px;font-weight:700}
+
+  /* roles grid */
+  .roles{display:grid;grid-template-columns:repeat(3,1fr);gap:1rem;margin-top:1.9rem}
+  .role{background:#fff;border:1px solid #e3e0d4;border-radius:14px;padding:16px 18px}
+  .slide.dark .role{background:#26412a;border-color:#3a5b3d}
+  .role .rt{font-weight:700;font-size:1.02rem;color:var(--green)}
+  .slide.dark .role .rt{color:var(--gold)}
+  .role .rs{font-size:.84rem;color:#838874;margin-top:3px;line-height:1.4}
+  .slide.dark .role .rs{color:#aeb6a3}
+
+  /* flow */
+  .flow{display:flex;align-items:stretch;gap:13px;flex-wrap:wrap;
+    justify-content:center;margin-top:2rem}
+  .node{background:#fff;border:1px solid #e3e0d4;border-radius:16px;
+    padding:16px 18px;min-width:148px;text-align:center}
+  .node.hub{background:var(--green);color:#fff;border-color:var(--green)}
+  .node .t{font-weight:700;font-size:.98rem;margin-bottom:3px}
+  .node .s{font-size:.76rem;color:#8a8f7c}
+  .node.hub .s{color:#bcd0b6}
+  .arrow{display:flex;align-items:center;color:var(--gold);font-size:1.5rem;font-weight:700}
+  .col{display:flex;flex-direction:column;gap:9px;justify-content:center}
+
+  /* stats */
+  .stats{display:grid;grid-template-columns:repeat(3,1fr);gap:1.3rem;
+    margin-top:2rem;width:100%}
+  .stat{background:#26412a;border:1px solid #3a5b3d;border-radius:18px;padding:24px 22px}
+  .stat .big{font-family:var(--serif);font-size:clamp(1.8rem,3.2vw,2.7rem);
+    color:var(--gold);font-weight:700;line-height:1.05}
+  .stat .cap{margin-top:.6rem;font-size:.9rem;color:#cdd2c4;line-height:1.45}
+
+  .pills{display:flex;flex-wrap:wrap;gap:.55rem;margin-top:1.6rem}
+  .pill{background:#fff;border:1px solid #e0ddd0;border-radius:999px;
+    padding:.45rem 1rem;font-size:.88rem;color:#4a4a3e;font-weight:600}
+  .slide.dark .pill{background:#26412a;border-color:#3a5b3d;color:#d3d8ca}
+  .note{font-size:.86rem;color:#9a9685;margin-top:1rem;font-style:italic}
+  .slide.dark .note{color:#9aa48f}
+
+  /* nav */
+  .nav{position:fixed;bottom:20px;left:0;right:0;display:flex;
+    justify-content:center;align-items:center;gap:16px;z-index:50}
+  .nav button{width:42px;height:42px;border-radius:50%;border:none;
+    background:rgba(255,255,255,.92);color:var(--dark);font-size:1.1rem;
+    cursor:pointer;box-shadow:0 8px 20px -8px rgba(0,0,0,.5);
+    transition:transform .15s,background .15s}
+  .nav button:hover{transform:scale(1.08);background:var(--gold)}
+  .dots{display:flex;gap:6px;flex-wrap:wrap;max-width:60vw;justify-content:center}
+  .dot{width:7px;height:7px;border-radius:50%;background:rgba(140,106,58,.35);
+    cursor:pointer;transition:all .2s}
+  .dot.on{background:var(--gold);width:20px;border-radius:4px}
+  .counter{position:fixed;top:20px;right:26px;z-index:50;font-size:.78rem;
+    letter-spacing:.1em;color:var(--bark);font-weight:700}
+  .counter.light{color:var(--gold)}
+  .progress{position:fixed;top:0;left:0;height:3px;background:var(--gold);
+    z-index:60;transition:width .4s ease}
+  .brandtag{position:fixed;top:16px;left:26px;z-index:50;display:flex;
+    align-items:center;gap:9px;font-family:var(--serif);
+    letter-spacing:.12em;font-size:.9rem;color:var(--bark)}
+  .brandtag .leaf{width:23px;height:23px}
+  .hint{position:fixed;bottom:22px;right:24px;z-index:50;font-size:.7rem;
+    color:#9a9685;letter-spacing:.04em}
+
+  @media(max-width:880px){
+    .cover,.row,.stats,.roles{grid-template-columns:1fr;gap:1.8rem}
+    .slide{padding:9vh 7vw}
+    .cover-art{order:-1}
+    .cover-art img,.cover-fallback{max-width:220px}
+    .hint{display:none}
+  }
+</style>
+</head>
+<body>
+
+<div class="progress" id="progress"></div>
+<div class="brandtag">
+  <svg class="leaf" viewBox="0 0 100 100"><path d="M50 8 C22 32 22 70 50 92 C78 70 78 32 50 8 Z"/><line x1="50" y1="14" x2="50" y2="86"/><path d="M50 34 L34 25 M50 34 L66 25 M50 54 L32 45 M50 54 L68 45 M50 72 L37 64 M50 72 L63 64"/></svg>
+  GROWZONE
+</div>
+<div class="counter" id="counter">01 / 17</div>
+
+<div class="deck" id="deck">
+
+  <!-- 1 COVER -->
+  <section class="slide dark active">
+    <div class="slide-inner cover">
+      <div>
+        <div class="eyebrow">История одного эксперимента</div>
+        <h1>Гроу</h1>
+        <p class="lead" style="margin-top:1.3rem">
+          Как я собрал себе ИИ-ассистента — и он постепенно
+          <span class="accent">заменил мне отдел аналитики</span>.
+        </p>
+        <div class="brandline">
+          <svg class="leaf" viewBox="0 0 100 100"><path d="M50 8 C22 32 22 70 50 92 C78 70 78 32 50 8 Z"/><line x1="50" y1="14" x2="50" y2="86"/><path d="M50 34 L34 25 M50 34 L66 25 M50 54 L32 45 M50 54 L68 45 M50 72 L37 64 M50 72 L63 64"/></svg>
+          <div>
+            <div class="bz">GROWZONE</div>
+            <small>Рассказывает основатель</small>
+          </div>
+        </div>
+      </div>
+      <div class="cover-art">
+        <div class="halo"></div>
+        <img src="grou.png" alt="Гроу"
+             onerror="this.outerHTML='&lt;div class=&quot;cover-fallback&quot;&gt;&lt;b&gt;здесь аватар Гроу&lt;/b&gt;&lt;span&gt;сохраните портрет персонажа как grou.png рядом с этим файлом&lt;/span&gt;&lt;/div&gt;'">
+      </div>
+    </div>
+  </section>
+
+  <!-- 2 ПРОБЛЕМА -->
+  <section class="slide">
+    <div class="slide-inner">
+      <div class="eyebrow">Глава первая</div>
+      <h2>Всё началось с простого раздражения</h2>
+      <p class="lead">
+        Меня постоянно о чём-то спрашивали: сколько лидов за неделю, что
+        по сделке с тем клиентом, сколько ушло на рекламу. И каждый раз —
+        одно и то же: открыть Bitrix24, найти отчёт, провалиться в него,
+        посчитать.
+      </p>
+      <p class="lead">
+        На телефоне это просто невозможно — мобильный Битрикс почти ничего
+        не показывает, а полную версию на маленьком экране не откроешь. На
+        компьютере можно, но долго: десятки кликов ради одной цифры.
+      </p>
+      <p class="big-quote">
+        Я ловил себя на мысли: трачу время не на решения,<br>
+        а на то, чтобы откопать данные для решений.
+      </p>
+    </div>
+  </section>
+
+  <!-- 3 ЧЕГО ХОТЕЛОСЬ -->
+  <section class="slide dark">
+    <div class="slide-inner">
+      <div class="eyebrow">Глава вторая</div>
+      <h2>Мне не нужны были отчёты.<br>Мне нужен был ответ.</h2>
+      <p class="lead">
+        Я хотел просто спросить — и сразу получить картину бизнеса. Как
+        с человеком, который держит всю компанию в голове и всегда на связи.
+      </p>
+      <p class="lead">
+        В фильмах у героя есть Джарвис: спросил — он ответил, подсказал,
+        обратил внимание на важное. Я подумал — а почему у бизнеса не может
+        быть такого же? <span class="accent">Не дашборд. Не ещё одна
+        программа. Собеседник.</span>
+      </p>
+    </div>
+  </section>
+
+  <!-- 4 ИДЕЯ -->
+  <section class="slide">
+    <div class="slide-inner">
+      <div class="eyebrow">Глава третья</div>
+      <h2>И тут я понял: мне нужен не помощник —<br>мне нужна команда</h2>
+      <p class="lead" style="max-width:64ch">
+        Бизнесу нужны разные взгляды: маркетолог смотрит на трафик, РОП —
+        на воронку и менеджеров, финдиректор — на деньги, аналитик — на
+        цифры в целом. Держать всех в штате дорого. А что, если собрать их
+        в одном ассистенте — один чат, а за ним команда специалистов?
+      </p>
+      <div class="roles">
+        <div class="role"><div class="rt">Аналитик</div><div class="rs">мгновенный доступ к CRM</div></div>
+        <div class="role"><div class="rt">РОП</div><div class="rs">воронка и менеджеры</div></div>
+        <div class="role"><div class="rt">Радар продаж</div><div class="rs">находит зависшие деньги</div></div>
+        <div class="role"><div class="rt">Контролёр звонков</div><div class="rs">слушает и оценивает</div></div>
+        <div class="role"><div class="rt">Маркетолог</div><div class="rs">трафик и реклама</div></div>
+        <div class="role"><div class="rt">Финдиректор</div><div class="rs">прибыль и расходы</div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 5 ЗНАКОМЬТЕСЬ -->
+  <section class="slide dark">
+    <div class="slide-inner cover">
+      <div>
+        <div class="eyebrow">Глава четвёртая</div>
+        <h2>Знакомьтесь — Гроу</h2>
+        <p class="lead">
+          Я дал ассистенту имя и лицо. Гроу — от Growzone и от слова
+          «расти». Дерево: спокойное, надёжное, своё.
+        </p>
+        <p class="lead">
+          Это не безликий чат-бот, а персонаж с характером — внимательный,
+          доброжелательный, профессиональный. С ним и работать приятнее,
+          и команде он понятнее.
+        </p>
+      </div>
+      <div class="cover-art">
+        <div class="halo"></div>
+        <img src="grou.png" alt="Гроу"
+             onerror="this.outerHTML='&lt;div class=&quot;cover-fallback&quot;&gt;&lt;b&gt;аватар Гроу&lt;/b&gt;&lt;span&gt;grou.png&lt;/span&gt;&lt;/div&gt;'">
+      </div>
+    </div>
+  </section>
+
+  <!-- 6 КАК СОБИРАЛ -->
+  <section class="slide">
+    <div class="slide-inner">
+      <div class="eyebrow">Глава пятая</div>
+      <h2>Я не строил его за один присест</h2>
+      <p class="lead" style="max-width:62ch">
+        Начал с малого — пара вопросов к CRM. Заработало — захотелось
+        больше. Добавил аналитику. Потом разбор звонков. Потом финансы.
+      </p>
+      <p class="big-quote">
+        Гроу растёт вместе с задачами.<br>
+        Каждую неделю я что-то докручиваю — и он становится сильнее.
+      </p>
+      <p class="lead" style="max-width:62ch;margin-top:1.4rem">
+        Это не «проект, который закончили». Это сотрудник, который учится.
+        И, в отличие от человека, ничего не забывает.
+      </p>
+    </div>
+  </section>
+
+  <!-- 7 РОЛЬ 1 -->
+  <section class="slide">
+    <div class="slide-inner row">
+      <div>
+        <div class="num">01</div>
+        <div class="eyebrow">Роль первая</div>
+        <h2>Аналитик, который<br>всегда под рукой</h2>
+        <p class="lead">
+          С этого всё и затевалось. Я спрашиваю обычными словами — и Гроу
+          сам идёт в CRM, считает и отвечает за секунды.
+        </p>
+        <ul class="benefits">
+          <li>Никаких отчётов и фильтров — просто вопрос</li>
+          <li>Ответ приходит в Telegram — хоть с телефона, хоть в дороге</li>
+          <li>Больше не нужно открывать Битрикс</li>
+        </ul>
+      </div>
+      <div class="chat">
+        <div class="bubble user"><span class="who">Я</span>Гроу, сколько у нас сейчас сделок в работе?</div>
+        <div class="bubble bot"><span class="who">Гроу</span>Сейчас в работе 86 сделок на 47,3 млн ₽. На финальных стадиях — 11 сделок (14,6 млн ₽), их стоит закрыть до конца месяца 🌱</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 8 РОЛЬ 2 -->
+  <section class="slide">
+    <div class="slide-inner row">
+      <div>
+        <div class="num">02</div>
+        <div class="eyebrow">Роль вторая</div>
+        <h2>РОП, который видит<br>каждого менеджера</h2>
+        <p class="lead">
+          Гроу разбирает продажи глубже стандартного отчёта: конверсия,
+          причины отказов, активность каждого менеджера — поимённо.
+        </p>
+        <ul class="benefits">
+          <li>Кто тянет, а кто простаивает — честная картина</li>
+          <li>Причины отказов с группировкой по смыслу</li>
+          <li>Конверсия по направлениям и этапам воронки</li>
+        </ul>
+      </div>
+      <div class="chat">
+        <div class="bubble user"><span class="who">Я</span>Как сработали менеджеры за неделю?</div>
+        <div class="bubble bot"><span class="who">Гроу</span>За неделю: Андрей — 24 сделки, Никита — 19, Любовь — 16. У Любови 6 сделок без активности 5+ дней — стоит подтолкнуть.</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 9 РОЛЬ 3 — РАДАР -->
+  <section class="slide dark">
+    <div class="slide-inner row">
+      <div>
+        <div class="num">03</div>
+        <div class="eyebrow">Роль третья — моя любимая</div>
+        <h2>Он находит деньги,<br>пока я сплю</h2>
+        <p class="lead">
+          До этого я дошёл не сразу. Гроу не ждёт вопроса — он сам, раз
+          в неделю, присылает сводку: где именно бизнес теряет деньги.
+        </p>
+        <p class="lead">
+          Когда я впервые это запустил, он показал почти
+          <span class="accent">18 миллионов рублей</span> в сделках, где
+          замер сделан, а продажа просто зависла. Эти деньги лежали в CRM
+          и тихо уходили.
+        </p>
+      </div>
+      <div class="chat">
+        <div class="bubble bot" style="max-width:100%"><span class="who">💰 Идеи для продаж · понедельник</span>
+          🔴 <b>Замеры без продолжения: 24</b><br>замер сделан, сделка стоит — 18,1 млн ₽<br><br>
+          🟡 <b>Застрявшие сделки: 44</b><br>без движения 14+ дней — 7,9 млн ₽<br><br>
+          🔵 <b>Забытые лиды: 74</b><br>раздать менеджерам на обзвон</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 10 РОЛЬ 4 — ЗВОНКИ -->
+  <section class="slide">
+    <div class="slide-inner row">
+      <div>
+        <div class="num">04</div>
+        <div class="eyebrow">Роль четвёртая</div>
+        <h2>Он слушает каждый<br>звонок за меня</h2>
+        <p class="lead">
+          Раньше записи звонков просто копились — слушать их было некому.
+          Теперь Гроу делает это сам: скачивает запись, расшифровывает
+          разговор и оценивает его.
+        </p>
+        <p class="lead">
+          Я вижу не «было 40 звонков», а что именно в них происходило.
+        </p>
+      </div>
+      <div class="chat">
+        <div class="bubble bot" style="max-width:100%"><span class="who">🎧 AI-разбор звонка</span>
+          <b>Клиент:</b> участок 12 соток, нужен автополив и газон под ключ.<br>
+          <b>Температура:</b> 🔥 горячий — готов к замеру.<br>
+          <b>Менеджер:</b> 4 из 5 — не назвал сроки и не зафиксировал бюджет.</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 11 РОЛЬ 5 — МАРКЕТОЛОГ -->
+  <section class="slide">
+    <div class="slide-inner row">
+      <div>
+        <div class="num">05</div>
+        <div class="eyebrow">Роль пятая</div>
+        <h2>Маркетолог, который не<br>даёт сливать бюджет</h2>
+        <p class="lead">
+          Гроу подключён к Яндекс.Метрике и Avito. Он показывает, откуда
+          приходят лиды, какой канал реально приносит продажи, а какой
+          просто ест деньги.
+        </p>
+        <ul class="benefits">
+          <li>Эффективность каналов — без открытия рекламных кабинетов</li>
+          <li>Слабые объявления, которые тратят бюджет впустую</li>
+        </ul>
+        <p class="note">Яндекс.Директ — на подходе, ждём доступ к API.</p>
+      </div>
+      <div class="chat">
+        <div class="bubble user"><span class="who">Я</span>Какие объявления на Авито не приносят заявок?</div>
+        <div class="bubble bot"><span class="who">Гроу</span>3 объявления за неделю съели 8 400 ₽ и не дали ни одной заявки. Вот они — стоит выключить или переписать 👇</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 12 РОЛЬ 6 — ФИНДИРЕКТОР -->
+  <section class="slide dark">
+    <div class="slide-inner row">
+      <div>
+        <div class="num">06</div>
+        <div class="eyebrow">Роль шестая</div>
+        <h2>И даже за финансами<br>он присматривает</h2>
+        <p class="lead">
+          Гроу видит управленческую отчётность. Я могу спросить про
+          прибыль, про статьи расходов, сравнить месяцы — и он ответит
+          языком финансиста, а не выгрузкой цифр.
+        </p>
+        <p class="lead">
+          Получился ассистент, который смотрит на бизнес
+          <span class="accent">со всех сторон сразу</span>.
+        </p>
+      </div>
+      <div class="chat">
+        <div class="bubble user"><span class="who">Я</span>Какая маржа по завершённым проектам в этом месяце?</div>
+        <div class="bubble bot"><span class="who">Гроу</span>По завершённым проектам мая: выручка 4,2 млн ₽, маржинальная прибыль 1,1 млн ₽, рентабельность 26%.</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 13 КАК РАЗГОВАРИВАЮ -->
+  <section class="slide">
+    <div class="slide-inner">
+      <div class="eyebrow">Глава шестая</div>
+      <h2>А разговаривать с ним —<br>проще некуда</h2>
+      <div class="row" style="margin-top:1.2rem">
+        <ul class="benefits" style="margin-top:0">
+          <li><b>Текстом</b> — как написал бы коллеге</li>
+          <li><b>Голосом</b> — наговорил на ходу, он распознал и ответил</li>
+          <li><b>С уточнениями</b> — помнит разговор, контекст повторять не нужно</li>
+        </ul>
+        <p class="lead">
+          Никто в команде не учился им пользоваться. Просто открываешь
+          чат и пишешь вопрос — Гроу понимает живой язык, а не команды.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- 14 КАК УСТРОЕНО -->
+  <section class="slide dark">
+    <div class="slide-inner" style="text-align:center">
+      <div class="eyebrow" style="text-align:center">Глава седьмая</div>
+      <h2>И при этом — никаких новых программ</h2>
+      <p class="lead" style="margin:0 auto">
+        Гроу живёт в Telegram, которым все и так пользуются. Внутри он
+        связывает CRM, телефонию и аналитику в одно целое.
+      </p>
+      <div class="flow">
+        <div class="node"><div class="t">Telegram</div><div class="s">вопрос текстом / голосом</div></div>
+        <div class="arrow">→</div>
+        <div class="node hub"><div class="t">🌱 Гроу</div><div class="s">мозг ассистента</div></div>
+        <div class="arrow">→</div>
+        <div class="col">
+          <div class="node"><div class="t">Bitrix24</div><div class="s">сделки, лиды, звонки</div></div>
+          <div class="node"><div class="t">Телефония + AI</div><div class="s">расшифровка и разбор</div></div>
+          <div class="node"><div class="t">Аналитика</div><div class="s">отчёты и финансы</div></div>
+        </div>
+      </div>
+      <p class="lead" style="margin:2rem auto 0;font-size:1rem">
+        К CRM у него доступ только на чтение — он ничего не меняет.
+        <span class="accent">Читает, считает и подсказывает.</span>
+      </p>
+    </div>
+  </section>
+
+  <!-- 15 ЧТО ДАЛО -->
+  <section class="slide dark">
+    <div class="slide-inner" style="text-align:center">
+      <div class="eyebrow" style="text-align:center">Глава восьмая</div>
+      <h2>Что в итоге изменилось</h2>
+      <p class="lead" style="margin:0 auto">
+        Я перестал зависеть от того, у кого есть время залезть в Битрикс.
+        И стало видно то, что раньше терялось.
+      </p>
+      <div class="stats">
+        <div class="stat">
+          <div class="big">Секунды</div>
+          <div class="cap">столько занимает ответ — вместо получаса кликов в CRM</div>
+        </div>
+        <div class="stat">
+          <div class="big">≈ 18 млн ₽</div>
+          <div class="cap">подсвечено в сделках, где замер сделан, а продажа зависла</div>
+        </div>
+        <div class="stat">
+          <div class="big">100+</div>
+          <div class="cap">звонков расшифровано и оценено без моего участия</div>
+        </div>
+      </div>
+      <p class="lead" style="margin:2rem auto 0;font-size:1.05rem">
+        Гроу не продаёт за меня. Он просто
+        <span class="accent">не даёт упустить то, что мы уже заработали</span>.
+      </p>
+    </div>
+  </section>
+
+  <!-- 16 ЧТО ПОНЯЛ -->
+  <section class="slide">
+    <div class="slide-inner">
+      <div class="eyebrow">Глава девятая</div>
+      <h2>Что я понял, пока его собирал</h2>
+      <ul class="benefits" style="max-width:64ch;margin-top:1.6rem">
+        <li>Такой ассистент экономит не время, а нервы — перестаёшь держать всё в голове.</li>
+        <li>Это не магия и не разовый проект, а сотрудник, которого постепенно обучаешь под свой бизнес.</li>
+        <li>Чем дольше он работает — тем полезнее: он накапливает контекст компании.</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- 17 ФИНАЛ -->
+  <section class="slide dark">
+    <div class="slide-inner cover">
+      <div>
+        <div class="eyebrow">Вместо эпилога</div>
+        <h2>Гроу всё ещё растёт</h2>
+        <p class="lead">
+          Я до сих пор его докручиваю — почти каждую неделю. Впереди
+          реактивация потерянных клиентов, связка звонков с воронкой,
+          новые роли.
+        </p>
+        <p class="lead">
+          Это был эксперимент, который окупился. И если идея откликается —
+          такого ассистента можно вырастить под любой бизнес, где есть
+          CRM, звонки и менеджеры.
+        </p>
+        <p class="big-quote" style="margin-top:1.6rem">
+          Спасибо, что выслушали мою историю.
+        </p>
+      </div>
+      <div class="cover-art">
+        <div class="halo"></div>
+        <img src="grou.png" alt="Гроу"
+             onerror="this.outerHTML='&lt;div class=&quot;cover-fallback&quot;&gt;&lt;b&gt;аватар Гроу&lt;/b&gt;&lt;span&gt;grou.png&lt;/span&gt;&lt;/div&gt;'">
+      </div>
+    </div>
+  </section>
+
+</div>
+
+<div class="nav">
+  <button id="prev" aria-label="Назад">‹</button>
+  <div class="dots" id="dots"></div>
+  <button id="next" aria-label="Вперёд">›</button>
+</div>
+<div class="hint">← → листать слайды</div>
+
+<script>
+  const slides=[...document.querySelectorAll('.slide')];
+  const dotsBox=document.getElementById('dots');
+  const counter=document.getElementById('counter');
+  const progress=document.getElementById('progress');
+  let i=0;
+  slides.forEach((_,n)=>{
+    const d=document.createElement('div');
+    d.className='dot'+(n===0?' on':'');
+    d.onclick=()=>go(n);
+    dotsBox.appendChild(d);
+  });
+  const dots=[...dotsBox.children];
+  function go(n){
+    i=Math.max(0,Math.min(slides.length-1,n));
+    slides.forEach((s,k)=>s.classList.toggle('active',k===i));
+    dots.forEach((d,k)=>d.classList.toggle('on',k===i));
+    counter.textContent=String(i+1).padStart(2,'0')+' / '+String(slides.length).padStart(2,'0');
+    counter.classList.toggle('light',slides[i].classList.contains('dark'));
+    progress.style.width=((i+1)/slides.length*100)+'%';
+  }
+  document.getElementById('next').onclick=()=>go(i+1);
+  document.getElementById('prev').onclick=()=>go(i-1);
+  document.addEventListener('keydown',e=>{
+    if(e.key==='ArrowRight'||e.key===' '||e.key==='PageDown')go(i+1);
+    if(e.key==='ArrowLeft'||e.key==='PageUp')go(i-1);
+    if(e.key==='Home')go(0);
+    if(e.key==='End')go(slides.length-1);
+  });
+  let sx=null;
+  document.addEventListener('touchstart',e=>sx=e.touches[0].clientX,{passive:true});
+  document.addEventListener('touchend',e=>{
+    if(sx===null)return;
+    const dx=e.changedTouches[0].clientX-sx;
+    if(Math.abs(dx)>50)go(i+(dx<0?1:-1));
+    sx=null;
+  });
+  go(0);
+</script>
+</body>
+</html>

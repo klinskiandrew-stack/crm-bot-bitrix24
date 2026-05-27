@@ -1,0 +1,549 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Гроу — AI-ассистент для бизнеса · Growzone</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@500;600;700&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --dark:#1F3220; --green:#2E5A2E; --leaf:#6C8F4A;
+    --bark:#8C6A3A; --gold:#CBA66A; --cream:#EAE7DF;
+    --paper:#F4F2EC; --ink:#2A2A24;
+    --serif:'Playfair Display',Georgia,serif;
+    --sans:'Manrope','Segoe UI',system-ui,sans-serif;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    font-family:var(--sans); background:var(--dark); color:var(--ink);
+    overflow:hidden;
+  }
+  /* ---------- deck ---------- */
+  .deck{position:fixed;inset:0}
+  .slide{
+    position:absolute;inset:0;display:flex;flex-direction:column;
+    justify-content:center;align-items:center;
+    padding:6vh 8vw; opacity:0; visibility:hidden;
+    transition:opacity .5s ease, visibility .5s;
+    background:var(--paper);
+  }
+  .slide.active{opacity:1;visibility:visible}
+  .slide.dark{background:var(--dark);color:var(--cream)}
+  .slide-inner{width:100%;max-width:1080px;
+    transform:translateY(18px);opacity:0;
+    transition:transform .55s ease .12s, opacity .55s ease .12s}
+  .slide.active .slide-inner{transform:translateY(0);opacity:1}
+
+  /* ---------- typography ---------- */
+  .eyebrow{font-size:.78rem;letter-spacing:.32em;text-transform:uppercase;
+    color:var(--bark);font-weight:600;margin-bottom:1.4rem}
+  .slide.dark .eyebrow{color:var(--gold)}
+  h1{font-family:var(--serif);font-weight:700;font-size:clamp(3rem,7vw,6rem);
+    line-height:1.02;color:var(--dark)}
+  .slide.dark h1{color:var(--cream)}
+  h2{font-family:var(--serif);font-weight:600;font-size:clamp(2rem,3.8vw,3.3rem);
+    line-height:1.12;color:var(--dark);margin-bottom:1.3rem}
+  .slide.dark h2{color:var(--cream)}
+  p.lead{font-size:clamp(1.05rem,1.5vw,1.4rem);line-height:1.6;
+    color:#4a4a40;max-width:46ch}
+  .slide.dark p.lead{color:#cdd2c4}
+  .accent{color:var(--green)}
+  .slide.dark .accent{color:var(--gold)}
+
+  /* ---------- leaf mark ---------- */
+  .leaf{width:46px;height:46px;flex:none}
+  .leaf path,.leaf line{stroke:var(--gold);stroke-width:4;
+    fill:none;stroke-linecap:round}
+
+  /* ---------- cover ---------- */
+  .cover{display:grid;grid-template-columns:1.05fr .95fr;gap:4vw;
+    align-items:center;width:100%;max-width:1120px}
+  .cover-art{position:relative;display:flex;justify-content:center}
+  .cover-art img{width:100%;max-width:420px;filter:drop-shadow(0 30px 50px rgba(0,0,0,.45))}
+  .cover-art .halo{position:absolute;inset:-6% -4% auto;height:0;padding-bottom:96%;
+    border:1px solid rgba(203,166,106,.4);border-radius:50%;z-index:0}
+  .cover-fallback{width:300px;height:380px;border:1px dashed rgba(203,166,106,.5);
+    border-radius:18px;display:flex;flex-direction:column;align-items:center;
+    justify-content:center;gap:14px;color:#9aa08c;text-align:center;font-size:.85rem;padding:24px}
+  .brandline{display:flex;align-items:center;gap:14px;margin-top:2.4rem}
+  .brandline .bz{font-family:var(--serif);letter-spacing:.14em;
+    font-size:1.1rem;color:var(--cream)}
+  .brandline small{color:var(--gold);letter-spacing:.18em;
+    text-transform:uppercase;font-size:.62rem}
+
+  /* ---------- generic blocks ---------- */
+  .num{font-family:var(--serif);font-size:clamp(3rem,6vw,5rem);
+    color:var(--gold);line-height:1;font-weight:700}
+  .row{display:grid;grid-template-columns:1fr 1fr;gap:3.4vw;
+    align-items:center;width:100%}
+  .stack>*+*{margin-top:1rem}
+  ul.benefits{list-style:none;margin-top:1.6rem;display:grid;gap:.85rem}
+  ul.benefits li{position:relative;padding-left:2rem;font-size:1.04rem;
+    line-height:1.5;color:#43433a}
+  .slide.dark ul.benefits li{color:#d3d8ca}
+  ul.benefits li::before{content:"";position:absolute;left:0;top:.32em;
+    width:1rem;height:1rem;background:
+    no-repeat center/contain
+    url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C8 7 8 17 12 22C16 17 16 7 12 2Z" fill="none" stroke="%23CBA66A" stroke-width="2.4"/><line x1="12" y1="4" x2="12" y2="20" stroke="%23CBA66A" stroke-width="2.4"/></svg>')}
+
+  /* ---------- chat bubbles ---------- */
+  .chat{background:#fff;border:1px solid #e3e0d4;border-radius:20px;
+    padding:22px;display:flex;flex-direction:column;gap:12px;
+    box-shadow:0 24px 50px -28px rgba(31,50,32,.45)}
+  .slide.dark .chat{background:#26412a;border-color:#395b3c}
+  .bubble{max-width:88%;padding:12px 16px;border-radius:16px;
+    font-size:.98rem;line-height:1.5}
+  .bubble.user{align-self:flex-end;background:var(--leaf);color:#fff;
+    border-bottom-right-radius:5px}
+  .bubble.bot{align-self:flex-start;background:var(--cream);color:#2f3a2c;
+    border-bottom-left-radius:5px}
+  .slide.dark .bubble.bot{background:#1f3320;color:#dfe4d6}
+  .bubble .who{display:block;font-size:.66rem;letter-spacing:.14em;
+    text-transform:uppercase;opacity:.65;margin-bottom:4px;font-weight:700}
+
+  /* ---------- flow diagram ---------- */
+  .flow{display:flex;align-items:stretch;gap:14px;flex-wrap:wrap;
+    justify-content:center;margin-top:2rem}
+  .node{background:#fff;border:1px solid #e3e0d4;border-radius:16px;
+    padding:18px 20px;min-width:150px;text-align:center}
+  .node.hub{background:var(--green);color:#fff;border-color:var(--green)}
+  .node .t{font-weight:700;font-size:1rem;margin-bottom:3px}
+  .node .s{font-size:.78rem;color:#8a8f7c}
+  .node.hub .s{color:#bcd0b6}
+  .arrow{display:flex;align-items:center;color:var(--gold);
+    font-size:1.5rem;font-weight:700}
+  .col{display:flex;flex-direction:column;gap:10px;justify-content:center}
+
+  /* ---------- stat cards ---------- */
+  .stats{display:grid;grid-template-columns:repeat(3,1fr);gap:1.4rem;
+    margin-top:2.2rem;width:100%}
+  .stat{background:#26412a;border:1px solid #3a5b3d;border-radius:18px;
+    padding:26px 22px}
+  .stat .big{font-family:var(--serif);font-size:clamp(2rem,3.4vw,2.9rem);
+    color:var(--gold);font-weight:700;line-height:1}
+  .stat .cap{margin-top:.7rem;font-size:.92rem;color:#cdd2c4;line-height:1.45}
+
+  /* ---------- pills ---------- */
+  .pills{display:flex;flex-wrap:wrap;gap:.6rem;margin-top:1.7rem}
+  .pill{background:#fff;border:1px solid #e0ddd0;border-radius:999px;
+    padding:.5rem 1rem;font-size:.9rem;color:#4a4a3e;font-weight:600}
+  .slide.dark .pill{background:#26412a;border-color:#3a5b3d;color:#d3d8ca}
+
+  /* ---------- nav ---------- */
+  .nav{position:fixed;bottom:22px;left:0;right:0;display:flex;
+    justify-content:center;align-items:center;gap:18px;z-index:50}
+  .nav button{width:44px;height:44px;border-radius:50%;border:none;
+    background:rgba(255,255,255,.9);color:var(--dark);font-size:1.1rem;
+    cursor:pointer;box-shadow:0 8px 20px -8px rgba(0,0,0,.5);
+    transition:transform .15s,background .15s}
+  .nav button:hover{transform:scale(1.08);background:var(--gold)}
+  .dots{display:flex;gap:8px}
+  .dot{width:8px;height:8px;border-radius:50%;background:rgba(140,106,58,.35);
+    cursor:pointer;transition:all .2s}
+  .dot.on{background:var(--gold);width:22px;border-radius:5px}
+  .counter{position:fixed;top:22px;right:28px;z-index:50;
+    font-size:.8rem;letter-spacing:.1em;color:var(--bark);font-weight:700}
+  .slide.dark ~ .counter,.counter.light{color:var(--gold)}
+  .progress{position:fixed;top:0;left:0;height:3px;background:var(--gold);
+    z-index:60;transition:width .4s ease}
+  .brandtag{position:fixed;top:18px;left:28px;z-index:50;display:flex;
+    align-items:center;gap:9px;font-family:var(--serif);
+    letter-spacing:.12em;font-size:.92rem;color:var(--bark)}
+  .brandtag .leaf{width:24px;height:24px}
+  .hint{position:fixed;bottom:24px;right:26px;z-index:50;font-size:.72rem;
+    color:#9a9685;letter-spacing:.04em}
+
+  @media(max-width:860px){
+    .cover,.row,.stats{grid-template-columns:1fr;gap:2rem}
+    .slide{padding:9vh 7vw}
+    .cover-art{order:-1}
+    .cover-art img,.cover-fallback{max-width:230px}
+    .hint{display:none}
+  }
+</style>
+</head>
+<body>
+
+<div class="progress" id="progress"></div>
+<div class="brandtag">
+  <svg class="leaf" viewBox="0 0 100 100"><path d="M50 8 C22 32 22 70 50 92 C78 70 78 32 50 8 Z"/><line x1="50" y1="14" x2="50" y2="86"/><path d="M50 34 L34 25 M50 34 L66 25 M50 54 L32 45 M50 54 L68 45 M50 72 L37 64 M50 72 L63 64"/></svg>
+  GROWZONE
+</div>
+<div class="counter" id="counter">01 / 12</div>
+
+<div class="deck" id="deck">
+
+  <!-- 1. COVER -->
+  <section class="slide dark active">
+    <div class="slide-inner cover">
+      <div>
+        <div class="eyebrow">Growzone · AI-ассистент</div>
+        <h1>Гроу</h1>
+        <p class="lead" style="margin-top:1.4rem">
+          Сотрудник, который знает о вашем бизнесе <span class="accent">всё</span> —
+          и работает круглосуточно. Без зарплаты, отпусков и «забыл перезвонить».
+        </p>
+        <div class="brandline">
+          <svg class="leaf" viewBox="0 0 100 100"><path d="M50 8 C22 32 22 70 50 92 C78 70 78 32 50 8 Z"/><line x1="50" y1="14" x2="50" y2="86"/><path d="M50 34 L34 25 M50 34 L66 25 M50 54 L32 45 M50 54 L68 45 M50 72 L37 64 M50 72 L63 64"/></svg>
+          <div>
+            <div class="bz">GROWZONE</div>
+            <small>Презентация возможностей</small>
+          </div>
+        </div>
+      </div>
+      <div class="cover-art">
+        <div class="halo"></div>
+        <img src="grou.png" alt="Гроу"
+             onerror="this.outerHTML='&lt;div class=&quot;cover-fallback&quot;&gt;&lt;b&gt;здесь аватар Гроу&lt;/b&gt;&lt;span&gt;сохраните портрет персонажа как grou.png рядом с этим файлом&lt;/span&gt;&lt;/div&gt;'">
+      </div>
+    </div>
+  </section>
+
+  <!-- 2. PROBLEM -->
+  <section class="slide">
+    <div class="slide-inner">
+      <div class="eyebrow">С чего всё начинается</div>
+      <h2>Ваши деньги уже в CRM.<br>Просто их никто не видит.</h2>
+      <p class="lead">
+        Каждый день бизнес теряет деньги тихо — без скандалов и аварий:
+      </p>
+      <ul class="benefits" style="max-width:none;grid-template-columns:1fr 1fr">
+        <li>Лид, на который не перезвонили вовремя</li>
+        <li>Сделка, которая зависла — и про неё забыли</li>
+        <li>Звонок, который никто не разобрал</li>
+        <li>Менеджер, у которого «всё хорошо» — на словах</li>
+      </ul>
+      <p class="lead" style="margin-top:1.8rem;max-width:60ch">
+        Данные есть. Но чтобы их добыть — нужно лезть в CRM, строить отчёты,
+        слушать записи. <span class="accent">В реальности этого не делает никто.</span>
+        И деньги утекают незаметно.
+      </p>
+    </div>
+  </section>
+
+  <!-- 3. MEET GROU -->
+  <section class="slide dark">
+    <div class="slide-inner row">
+      <div>
+        <div class="eyebrow">Решение</div>
+        <h2>Поэтому мы вырастили&nbsp;Гроу</h2>
+        <p class="lead">
+          Гроу — AI-ассистент, который живёт в Telegram и подключён к вашей
+          CRM, телефонии и аналитике.
+        </p>
+        <p class="lead" style="margin-top:1rem">
+          Вы спрашиваете обычными словами — он отвечает цифрами, фактами
+          и идеями. <span class="accent">Не нужно учиться. Не нужно открывать
+          Битрикс.</span> Просто спросите — голосом или текстом.
+        </p>
+      </div>
+      <div class="chat">
+        <div class="bubble user"><span class="who">Вы</span>Гроу, сколько у нас сделок в работе и на какую сумму?</div>
+        <div class="bubble bot"><span class="who">Гроу</span>Сейчас в работе 86 сделок на 47,3 млн ₽. На финальных стадиях — 11 сделок (14,6 млн ₽), их стоит закрыть до конца месяца 🌱</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 4. POWER 1 -->
+  <section class="slide">
+    <div class="slide-inner row">
+      <div>
+        <div class="num">01</div>
+        <h2>Спросите CRM<br>как живого аналитика</h2>
+        <p class="lead">
+          «Сколько лидов с Авито в мае?», «Как сработал Иванов?»,
+          «Покажи воронку» — Гроу понимает вопрос, сам идёт в CRM,
+          считает и отвечает за секунды.
+        </p>
+        <ul class="benefits">
+          <li>Естественный язык — никаких фильтров и выгрузок</li>
+          <li>Голосовые сообщения — спросили на ходу, получили ответ</li>
+          <li>Работает прямо в рабочем чате, где вся команда</li>
+        </ul>
+      </div>
+      <div class="chat">
+        <div class="bubble user"><span class="who">Вы · голосом 🎙</span>Сколько лидов с Авито пришло в мае и сколько отказов?</div>
+        <div class="bubble bot"><span class="who">Гроу</span>За май с Авито — 64 лида. Квалифицировано 19, в работе 12, отказов 33. Главная причина отказа — «дорого» (14 лидов).</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 5. POWER 2 -->
+  <section class="slide">
+    <div class="slide-inner row">
+      <div>
+        <div class="num">02</div>
+        <h2>Аналитика, которая<br>раньше занимала часы</h2>
+        <p class="lead">
+          Причины отказов, конверсия по направлениям, активность каждого
+          менеджера по имени, эффективность каналов трафика —
+          точные цифры, а не «примерно».
+        </p>
+        <ul class="benefits">
+          <li>Почему отваливаются лиды и сделки — с разбивкой по причинам</li>
+          <li>Кто из менеджеров тянет, а кто проседает</li>
+          <li>Какой рекламный канал реально приносит продажи</li>
+        </ul>
+      </div>
+      <div class="chat">
+        <div class="bubble user"><span class="who">Вы</span>Как сработала Останина за неделю?</div>
+        <div class="bubble bot"><span class="who">Гроу</span>Останина Любовь за неделю: 18 новых сделок, 4 проведённых замера, средняя сумма сделки 640 тыс ₽. Но 6 сделок без активности 5+ дней — стоит подтолкнуть.</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 6. POWER 3 -->
+  <section class="slide dark">
+    <div class="slide-inner row">
+      <div>
+        <div class="num">03</div>
+        <h2>Каждый звонок —<br>под контролем</h2>
+        <p class="lead">
+          Гроу слушает звонки колл-центра за вас. Скачивает запись,
+          расшифровывает речь и AI оценивает каждый разговор.
+        </p>
+        <ul class="benefits">
+          <li>О чём говорили и что на самом деле нужно клиенту</li>
+          <li>Как отработал менеджер — оценка по каждому звонку</li>
+          <li>Насколько «горячий» лид — стоит ли дожимать</li>
+          <li>Связка звонок → сделка → результат в одной таблице</li>
+        </ul>
+      </div>
+      <div class="stack">
+        <div class="chat">
+          <div class="bubble bot" style="max-width:100%"><span class="who">AI-разбор звонка</span>
+            <b>Клиент:</b> участок 12 соток, нужен автополив + газон под ключ.<br>
+            <b>Температура:</b> 🔥 горячий — готов к замеру.<br>
+            <b>Менеджер:</b> 4/5 — не предложил сроки и не зафиксировал бюджет.</div>
+        </div>
+        <p class="lead" style="font-size:1rem">
+          Сквозная картина: видно не только <i>что</i> сказали в звонке,
+          но и <i>чем</i> он закончился в CRM.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- 7. POWER 4 -->
+  <section class="slide">
+    <div class="slide-inner row">
+      <div>
+        <div class="num">04</div>
+        <h2>Радар, который<br>находит деньги сам</h2>
+        <p class="lead">
+          Гроу не ждёт вопроса. Раз в неделю он сам присылает руководителю
+          сводку «Идеи для продаж»: где именно бизнес теряет деньги.
+        </p>
+        <ul class="benefits">
+          <li>Сделки, которые застряли на стадии</li>
+          <li>Замеры, после которых наступила тишина</li>
+          <li>Лиды, про которых забыли</li>
+        </ul>
+        <p class="lead" style="margin-top:1.3rem;font-size:1rem">
+          Это деньги, которые <span class="accent">уже почти у вас в кармане</span> —
+          Гроу просто не даёт о них забыть.
+        </p>
+      </div>
+      <div class="chat">
+        <div class="bubble bot" style="max-width:100%"><span class="who">💰 Идеи для продаж · понедельник</span>
+          🔴 <b>Замеры без продолжения: 24</b><br>замер сделан, сделка стоит — 18,1 млн ₽<br><br>
+          🟡 <b>Застрявшие сделки: 44</b><br>без движения 14+ дней — 7,9 млн ₽<br><br>
+          🔵 <b>Забытые лиды: 74</b><br>раздать менеджерам на обзвон</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 8. POWER 5 -->
+  <section class="slide">
+    <div class="slide-inner">
+      <div class="num">05</div>
+      <h2>И ещё немного полезного</h2>
+      <div class="row" style="margin-top:1.4rem">
+        <ul class="benefits" style="margin-top:0">
+          <li><b>Выгрузка в Excel</b> — «скинь лиды файлом» прямо в чат</li>
+          <li><b>Планирование встреч</b> — Zoom-созвоны из переписки</li>
+          <li><b>Авто-мониторинг</b> — если что-то сломалось, вы узнаёте первым</li>
+        </ul>
+        <ul class="benefits" style="margin-top:0">
+          <li><b>Изоляция данных</b> — каждый сотрудник видит только своё</li>
+          <li><b>Ежедневные отчёты</b> — сводка по компании каждое утро</li>
+          <li><b>Память о диалоге</b> — можно уточнять, не повторяя контекст</li>
+        </ul>
+      </div>
+      <p class="lead" style="margin-top:1.8rem;max-width:60ch">
+        Один ассистент закрывает работу, которую обычно растаскивают между
+        аналитиком, РОПом и парой таблиц.
+      </p>
+    </div>
+  </section>
+
+  <!-- 9. HOW IT WORKS -->
+  <section class="slide dark">
+    <div class="slide-inner" style="text-align:center">
+      <div class="eyebrow" style="text-align:center">Как это устроено</div>
+      <h2>Никаких новых программ</h2>
+      <p class="lead" style="margin:0 auto">
+        Гроу живёт в Telegram, которым вы и так пользуетесь каждый день.
+        Внутри — он связывает ваши системы воедино.
+      </p>
+      <div class="flow">
+        <div class="node"><div class="t">Telegram</div><div class="s">вопрос текстом / голосом</div></div>
+        <div class="arrow">→</div>
+        <div class="node hub"><div class="t">🌱 Гроу</div><div class="s">AI-мозг ассистента</div></div>
+        <div class="arrow">→</div>
+        <div class="col">
+          <div class="node"><div class="t">Bitrix24</div><div class="s">сделки, лиды, звонки</div></div>
+          <div class="node"><div class="t">Телефония + AI</div><div class="s">расшифровка и разбор</div></div>
+          <div class="node"><div class="t">Аналитика</div><div class="s">отчёты и таблицы</div></div>
+        </div>
+      </div>
+      <p class="lead" style="margin:2rem auto 0;font-size:1rem">
+        Доступ к CRM — только на чтение. Гроу ничего не меняет в ваших
+        данных, он их <span class="accent">читает, считает и подсказывает</span>.
+      </p>
+    </div>
+  </section>
+
+  <!-- 10. PROOF -->
+  <section class="slide dark">
+    <div class="slide-inner" style="text-align:center">
+      <div class="eyebrow" style="text-align:center">Это не теория</div>
+      <h2>Что Гроу нашёл в реальной компании</h2>
+      <p class="lead" style="margin:0 auto">
+        Всё это лежало в CRM незамеченным — пока Гроу не подсветил:
+      </p>
+      <div class="stats">
+        <div class="stat">
+          <div class="big">18,1 млн ₽</div>
+          <div class="cap">в 24 сделках, где замер сделан, но продажа зависла</div>
+        </div>
+        <div class="stat">
+          <div class="big">7,9 млн ₽</div>
+          <div class="cap">в 44 сделках, застрявших в воронке без движения</div>
+        </div>
+        <div class="stat">
+          <div class="big">100+</div>
+          <div class="cap">звонков расшифровано и оценено AI без участия человека</div>
+        </div>
+      </div>
+      <p class="lead" style="margin:2.1rem auto 0;font-size:1.05rem">
+        Один взгляд ассистента — и видно, <span class="accent">где забрать деньги уже на этой неделе</span>.
+      </p>
+    </div>
+  </section>
+
+  <!-- 11. COST -->
+  <section class="slide">
+    <div class="slide-inner row">
+      <div>
+        <div class="eyebrow">Сколько стоит такой сотрудник</div>
+        <h2>Дешевле одного рабочего дня аналитика</h2>
+        <p class="lead">
+          Гроу не требует мощного железа и дорогих подписок.
+        </p>
+        <ul class="benefits">
+          <li>Работает на небольшом сервере</li>
+          <li>Распознавание речи — локальное, без поминутной оплаты</li>
+          <li>AI-ответы — копейки за запрос</li>
+        </ul>
+      </div>
+      <div class="stack">
+        <div class="chat">
+          <div class="bubble bot" style="max-width:100%"><span class="who">Сравнение</span>
+            Аналитик-человек: зарплата, выходные, отпуск, «забыл».<br><br>
+            <b>Гроу:</b> отвечает за секунды, работает 24/7, не устаёт и не увольняется 🌱</div>
+        </div>
+        <div class="pills">
+          <span class="pill">Окупается с первой найденной сделки</span>
+          <span class="pill">Запуск — дни, не месяцы</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 12. CTA -->
+  <section class="slide dark">
+    <div class="slide-inner cover">
+      <div>
+        <div class="eyebrow">Ваш ход</div>
+        <h2>Гроу можно вырастить<br>под любой бизнес</h2>
+        <p class="lead">
+          Не только озеленение. Любая компания, где есть CRM, звонки
+          и менеджеры — получит своего ассистента.
+        </p>
+        <p class="lead" style="margin-top:1rem">
+          Подключаем ваши системы, настраиваем под ваши процессы
+          и фирменный стиль.
+        </p>
+        <div class="pills">
+          <span class="pill">CRM-аналитика</span>
+          <span class="pill">Контроль звонков</span>
+          <span class="pill">Радар продаж</span>
+        </div>
+        <p class="lead" style="margin-top:2rem;font-family:var(--serif);
+           font-size:1.5rem;color:var(--gold)">
+          Хотите такого сотрудника? Давайте обсудим.
+        </p>
+      </div>
+      <div class="cover-art">
+        <div class="halo"></div>
+        <img src="grou.png" alt="Гроу"
+             onerror="this.outerHTML='&lt;div class=&quot;cover-fallback&quot;&gt;&lt;b&gt;аватар Гроу&lt;/b&gt;&lt;span&gt;grou.png&lt;/span&gt;&lt;/div&gt;'">
+      </div>
+    </div>
+  </section>
+
+</div>
+
+<div class="nav">
+  <button id="prev" aria-label="Назад">‹</button>
+  <div class="dots" id="dots"></div>
+  <button id="next" aria-label="Вперёд">›</button>
+</div>
+<div class="hint">← → листать слайды</div>
+
+<script>
+  const slides=[...document.querySelectorAll('.slide')];
+  const dotsBox=document.getElementById('dots');
+  const counter=document.getElementById('counter');
+  const progress=document.getElementById('progress');
+  let i=0;
+  slides.forEach((_,n)=>{
+    const d=document.createElement('div');
+    d.className='dot'+(n===0?' on':'');
+    d.onclick=()=>go(n);
+    dotsBox.appendChild(d);
+  });
+  const dots=[...dotsBox.children];
+  function go(n){
+    i=Math.max(0,Math.min(slides.length-1,n));
+    slides.forEach((s,k)=>s.classList.toggle('active',k===i));
+    dots.forEach((d,k)=>d.classList.toggle('on',k===i));
+    const num=String(i+1).padStart(2,'0');
+    counter.textContent=num+' / '+String(slides.length).padStart(2,'0');
+    counter.classList.toggle('light',slides[i].classList.contains('dark'));
+    progress.style.width=((i+1)/slides.length*100)+'%';
+  }
+  document.getElementById('next').onclick=()=>go(i+1);
+  document.getElementById('prev').onclick=()=>go(i-1);
+  document.addEventListener('keydown',e=>{
+    if(e.key==='ArrowRight'||e.key===' '||e.key==='PageDown')go(i+1);
+    if(e.key==='ArrowLeft'||e.key==='PageUp')go(i-1);
+    if(e.key==='Home')go(0);
+    if(e.key==='End')go(slides.length-1);
+  });
+  let sx=null;
+  document.addEventListener('touchstart',e=>sx=e.touches[0].clientX,{passive:true});
+  document.addEventListener('touchend',e=>{
+    if(sx===null)return;
+    const dx=e.changedTouches[0].clientX-sx;
+    if(Math.abs(dx)>50)go(i+(dx<0?1:-1));
+    sx=null;
+  });
+  go(0);
+</script>
+</body>
+</html>
