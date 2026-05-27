@@ -20,6 +20,7 @@ venv/
 ENV/
 env/
 .env
+.env.bak
 .env.local
 .env.*.local
 *.db
