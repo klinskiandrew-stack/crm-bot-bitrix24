@@ -55,6 +55,95 @@
   .stat .label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }
   .stat .value { font-size: 24px; font-weight: 600; margin-top: 2px; color: var(--accent); }
   .stat .sub { font-size: 11px; color: var(--muted); margin-top: 2px; }
+
+  /* Воронка конверсий — отдельная секция между плитками и фильтрами */
+  .funnel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px 18px;
+    margin-bottom: 16px;
+  }
+  .funnel:empty { display: none; }
+  .funnel-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--muted);
+    margin-bottom: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .funnel-row {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-wrap: wrap;
+  }
+  .funnel-step {
+    background: linear-gradient(135deg, #eef2ff, #ede9fe);
+    border-radius: 8px;
+    padding: 12px 16px;
+    min-width: 130px;
+    text-align: center;
+    flex: 1;
+  }
+  .funnel-step-label {
+    font-size: 11px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    font-weight: 500;
+  }
+  .funnel-step-value {
+    font-size: 26px;
+    font-weight: 700;
+    color: var(--accent);
+    margin-top: 2px;
+    line-height: 1.1;
+  }
+  .funnel-step-sub {
+    font-size: 10px;
+    color: var(--muted);
+    margin-top: 3px;
+    font-style: italic;
+  }
+  .funnel-step-final {
+    background: linear-gradient(135deg, #d1fae5, #a7f3d0);
+  }
+  .funnel-step-final .funnel-step-value { color: #065f46; }
+  .funnel-step-money {
+    background: linear-gradient(135deg, #fef3c7, #fde68a);
+    flex: 1.3;
+  }
+  .funnel-money { font-size: 20px !important; color: #78350f !important; }
+  .funnel-arrow {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    flex: 0 0 60px;
+    color: var(--accent);
+    position: relative;
+  }
+  .funnel-arrow-line {
+    width: 100%;
+    height: 2px;
+    background: linear-gradient(90deg, transparent, var(--accent), transparent);
+  }
+  .funnel-arrow-pct {
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--accent);
+    margin-top: 4px;
+  }
+  @media (max-width: 900px) {
+    .funnel-row { flex-direction: column; align-items: stretch; }
+    .funnel-arrow { flex: 0 0 auto; padding: 4px 0; }
+    .funnel-arrow-line {
+      width: 2px; height: 16px;
+      background: linear-gradient(180deg, transparent, var(--accent), transparent);
+    }
+  }
+
   .filters {
     background: var(--panel);
     border: 1px solid var(--border);
@@ -197,6 +286,8 @@
 <div class="container">
 
   <div class="stats" id="stats"></div>
+
+  <div id="funnel" class="funnel"></div>
 
   <div class="filters">
     <label>Источник
@@ -362,15 +453,27 @@ function semanticClass(sem) {
 function computeStats(leads, deals) {
   const todayStr = new Date().toISOString().slice(0, 10);
   const isToday = r => (r.created || '').slice(0, 10) === todayStr;
-  const wonDeals = deals.filter(d => d.is_won);
+  // "Продажа" = сделка проходила через стадию "Договор заключён"
+  // (PREPARATION). Это исторический факт — даже если сделка ушла
+  // дальше или провалена, она засчитывается.
+  const salesDeals = deals.filter(d => d.passed_contract);
+  const measurementDeals = deals.filter(d => d.passed_measurement);
+  const qualifiedLeads = leads.filter(l => l.is_qualified);
   return {
     leads_total: leads.length,
     leads_today: leads.filter(isToday).length,
     deals_total: deals.length,
     deals_today: deals.filter(isToday).length,
-    deals_won: wonDeals.length,
-    deals_won_sum: wonDeals.reduce((a, d) => a + (d.opportunity || 0), 0),
+    qualified_leads: qualifiedLeads.length,
+    measurements_done: measurementDeals.length,
+    sales_count: salesDeals.length,
+    sales_sum: salesDeals.reduce((a, d) => a + (d.opportunity || 0), 0),
   };
+}
+
+function fmtPct(num, den) {
+  if (!den) return '—';
+  return ((num / den) * 100).toFixed(1).replace('.0', '') + '%';
 }
 
 function periodLabel() {
@@ -394,7 +497,7 @@ function channelLabel() {
 
 function renderStats(filteredLeads, filteredDeals) {
   const s = computeStats(filteredLeads, filteredDeals);
-  const wonSum = s.deals_won_sum ? fmtMoney(s.deals_won_sum) : '—';
+  const salesSum = s.sales_sum ? fmtMoney(s.sales_sum) : '—';
   document.getElementById('stats').innerHTML = `
     <div class="stat">
       <div class="label">Лиды (в выборке)</div>
@@ -407,14 +510,69 @@ function renderStats(filteredLeads, filteredDeals) {
       <div class="sub">Сегодня: ${s.deals_today}</div>
     </div>
     <div class="stat">
-      <div class="label">Выиграно</div>
-      <div class="value">${s.deals_won}</div>
-      <div class="sub">${wonSum}</div>
+      <div class="label">Продажи (договор заключён)</div>
+      <div class="value">${s.sales_count}</div>
+      <div class="sub">${salesSum}</div>
     </div>
     <div class="stat">
       <div class="label">Канал</div>
       <div class="value" style="font-size:16px">${escapeHtml(channelLabel())}</div>
       <div class="sub">Период: ${escapeHtml(periodLabel())}</div>
+    </div>
+  `;
+  renderFunnel(s);
+}
+
+function renderFunnel(s) {
+  const el = document.getElementById('funnel');
+  if (!el) return;
+  // CR-метрики: каждая считается от ПРЕДЫДУЩЕГО шага.
+  const cr1 = fmtPct(s.qualified_leads, s.leads_total);    // лид → квал
+  const cr2 = fmtPct(s.measurements_done, s.qualified_leads); // квал → замер
+  const cr3 = fmtPct(s.sales_count, s.measurements_done);    // замер → продажа
+  // Общая конверсия лид → продажа.
+  const crOverall = fmtPct(s.sales_count, s.leads_total);
+  const salesSum = s.sales_sum ? fmtMoney(s.sales_sum) : '—';
+
+  el.innerHTML = `
+    <div class="funnel-title">📈 Воронка конверсий (по текущей выборке)</div>
+    <div class="funnel-row">
+      <div class="funnel-step">
+        <div class="funnel-step-label">Лиды</div>
+        <div class="funnel-step-value">${s.leads_total}</div>
+      </div>
+      <div class="funnel-arrow">
+        <div class="funnel-arrow-line"></div>
+        <div class="funnel-arrow-pct">${cr1}</div>
+      </div>
+      <div class="funnel-step">
+        <div class="funnel-step-label">Квал-лиды</div>
+        <div class="funnel-step-value">${s.qualified_leads}</div>
+        <div class="funnel-step-sub">status = "Качественный"</div>
+      </div>
+      <div class="funnel-arrow">
+        <div class="funnel-arrow-line"></div>
+        <div class="funnel-arrow-pct">${cr2}</div>
+      </div>
+      <div class="funnel-step">
+        <div class="funnel-step-label">Замеры</div>
+        <div class="funnel-step-value">${s.measurements_done}</div>
+        <div class="funnel-step-sub">прошли стадию «Замер выполнен»</div>
+      </div>
+      <div class="funnel-arrow">
+        <div class="funnel-arrow-line"></div>
+        <div class="funnel-arrow-pct">${cr3}</div>
+      </div>
+      <div class="funnel-step funnel-step-final">
+        <div class="funnel-step-label">Продажи</div>
+        <div class="funnel-step-value">${s.sales_count}</div>
+        <div class="funnel-step-sub">«Договор заключён»</div>
+      </div>
+      <div class="funnel-step funnel-step-money">
+        <div class="funnel-step-label">Сумма продаж</div>
+        <div class="funnel-step-value funnel-money">${salesSum}</div>
+        <div class="funnel-step-sub">Лид→Продажа: <b>${crOverall}</b></div>
+      </div>
     </div>
   `;
 }

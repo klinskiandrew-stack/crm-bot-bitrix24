@@ -44,6 +44,17 @@ PREFETCH_COMMENTS_FOR_LATEST = 30
 REJECTION_REASON_UF = "UF_CRM_1740994523382"
 REJECTION_REASON_DETAIL_UF = "UF_CRM_1723465843"
 
+# Основная воронка ("Автополивы Сделки") = category_id 0.
+DEAL_CATEGORY = 0
+
+# STAGE_ID, по которым считаем воронку конверсии. Узнаны через
+# crm.status.list(ENTITY_ID=DEAL_STAGE) — см. server probe 25.05.2026.
+STAGE_MEASUREMENT_DONE = "UC_BFLJ2N"   # "Замер выполнен"
+STAGE_CONTRACT_SIGNED = "PREPARATION"  # "Договор заключен (внесен аванс)"
+
+# Статус лида = квал-лид (Качественный лид, semantic=S).
+LEAD_STATUS_QUALIFIED = "CONVERTED"
+
 # Маппинг каналов: (code, label, yaml_key, utm_source_filter).
 CHANNEL_DEFS: List[Tuple[str, str, str, Optional[str]]] = [
     ("vk",            "ВКонтакте", "ВКонтакте", None),
@@ -98,6 +109,11 @@ class CacheState:
     webforms: Dict[str, str] = field(default_factory=dict)
     source_names: Dict[str, str] = field(default_factory=dict)
     rejection_reasons: Dict[str, str] = field(default_factory=dict)
+    # ID сделок, которые когда-либо проходили через эти стадии. Для воронки
+    # конверсий: попадание на стадию засчитывается, даже если сделка потом
+    # ушла дальше или была провалена.
+    measurement_done_deal_ids: set = field(default_factory=set)
+    contract_signed_deal_ids: set = field(default_factory=set)
     last_refresh: Optional[datetime] = None
     last_error: Optional[str] = None
 
@@ -275,6 +291,12 @@ class DashboardService:
         # 4. Менеджеры.
         await self._refresh_user_names(b24, leads, deals)
 
+        # 4b. Stagehistory — какие сделки прошли через ключевые стадии
+        # ("Замер выполнен", "Договор заключён"). Это нужно для воронки
+        # конверсий: попадание на стадию — исторический факт, сделка может
+        # уже уехать в Монтаж или быть провалена, но её надо посчитать.
+        await self._refresh_stage_history(b24)
+
         # 5. Прелоад комментариев таймлайна для последних N карточек.
         new_comments: Dict[str, Dict[int, List[Dict[str, Any]]]] = {"lead": {}, "deal": {}}
         prefetch_leads = leads[:PREFETCH_COMMENTS_FOR_LATEST]
@@ -382,6 +404,44 @@ class DashboardService:
                 full = " ".join(filter(None, [u.get("NAME") or "", u.get("LAST_NAME") or ""])).strip()
                 self.state.users[int(uid)] = full or f"User #{uid}"
 
+    async def _refresh_stage_history(self, b24: Bitrix24Client) -> None:
+        """Грузит ID сделок, проходивших через 'Замер выполнен' и 'Договор'.
+
+        Используем crm.stagehistory.list с фильтром по STAGE_ID и периодом
+        = `lookback_days`. Это даёт исторические факты — если сделка хоть
+        раз была на этой стадии, она засчитывается даже если уехала
+        дальше (в Монтаж) или была провалена.
+        """
+        date_from = (datetime.now(_MSK).date() - timedelta(days=self.lookback_days)).strftime("%Y-%m-%d")
+        # date_to: завтра, чтобы поймать сегодняшние переходы.
+        date_to = (datetime.now(_MSK).date() + timedelta(days=1)).strftime("%Y-%m-%d")
+
+        async def _stage_ids(stage_id: str) -> set:
+            res = await b24.get_stage_history(
+                stage_id=stage_id,
+                date_from=date_from,
+                date_to=date_to,
+                category_id=DEAL_CATEGORY,
+                entity_type_id=2,  # deal
+            )
+            if isinstance(res, dict) and "error" in res:
+                logger.warning("stagehistory error", stage=stage_id, error=res["error"])
+                return set()
+            ids = (res or {}).get("unique_deal_ids") or []
+            return set(int(x) for x in ids)
+
+        measurement_ids, contract_ids = await asyncio.gather(
+            _stage_ids(STAGE_MEASUREMENT_DONE),
+            _stage_ids(STAGE_CONTRACT_SIGNED),
+        )
+        self.state.measurement_done_deal_ids = measurement_ids
+        self.state.contract_signed_deal_ids = contract_ids
+        logger.info(
+            "Stagehistory loaded",
+            measurement_done=len(measurement_ids),
+            contract_signed=len(contract_ids),
+        )
+
     # ---------- Rendering ----------
 
     def _build_card_url(self, kind: str, entity_id: int) -> str:
@@ -426,6 +486,7 @@ class DashboardService:
             "utm_term": lead.get("UTM_TERM") or "",
             "rejection_reason": self._resolve_rejection(lead.get(REJECTION_REASON_UF)),
             "rejection_reason_detail": str(lead.get(REJECTION_REASON_DETAIL_UF) or ""),
+            "is_qualified": status_id == LEAD_STATUS_QUALIFIED,
             "card_comment": lead.get("COMMENTS") or "",
             "comments_cached": lead_id in self.state.comments.get("lead", {}),
             "comments_count": len(self.state.comments.get("lead", {}).get(lead_id, [])),
@@ -448,6 +509,10 @@ class DashboardService:
             "stage_semantic": deal.get("STAGE_SEMANTIC_ID") or "",
             "is_won": deal.get("IS_WON") == "Y",
             "is_closed": deal.get("CLOSED") == "Y",
+            # Прошла ли сделка через стадии замера/договора (исторически,
+            # по crm.stagehistory.list). Используется для воронки CR.
+            "passed_measurement": deal_id in self.state.measurement_done_deal_ids,
+            "passed_contract": deal_id in self.state.contract_signed_deal_ids,
             "opportunity": float(deal.get("OPPORTUNITY") or 0),
             "currency": deal.get("CURRENCY_ID") or "RUB",
             "manager": self.state.users.get(manager_id, "") if manager_id else "",
