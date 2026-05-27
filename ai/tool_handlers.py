@@ -229,6 +229,170 @@ class ToolHandlers:
             logger.error("Tool handler error", tool=tool_name, error=str(e))
             return {"error": str(e)}
 
+    async def manager_call_stats(self, params: Dict[str, Any], user_context: Dict[str, Any]) -> Dict[str, Any]:
+        """Real phone-talk time per sales manager via voximplant.statistic.get."""
+        err = _validate_params(params, date_keys=("date_from", "date_to"), stage_key="not_used")
+        if err:
+            return err
+
+        date_from = params["date_from"]
+        date_to = params["date_to"]
+        # day-after for exclusive upper bound (full day inclusive)
+        from datetime import datetime as _dt, timedelta as _td
+        try:
+            dto = _dt.strptime(date_to, "%Y-%m-%d") + _td(days=1)
+        except ValueError:
+            return {"error": f"date_to '{date_to}' не формата YYYY-MM-DD"}
+
+        client = await self._get_client()
+        users_map = await client.get_users_map()
+
+        # 3 менеджера отдела продаж — фиксированный список.
+        from reports.manager_daily import SALES_MANAGERS
+        sales_uid_to_name = {
+            uid: info["name"]
+            for uid, info in users_map.items()
+            if info.get("name") in SALES_MANAGERS
+        }
+
+        # Если запросили конкретного менеджера — ограничиваем.
+        manager_ids, mgr_err = await self._resolve_manager_filter(params)
+        if mgr_err:
+            return mgr_err
+        if manager_ids:
+            target_uids = [u for u in manager_ids if u in sales_uid_to_name]
+            if not target_uids:
+                # Запросили не-менеджера отдела продаж — пусть будет он один.
+                target_uids = manager_ids
+                for uid in target_uids:
+                    if uid not in sales_uid_to_name and uid in users_map:
+                        sales_uid_to_name[uid] = users_map[uid].get("name", f"#{uid}")
+        else:
+            target_uids = list(sales_uid_to_name.keys())
+
+        calls = await client.get_voximplant_stats(
+            date_from=f"{date_from}T00:00:00+03:00",
+            date_to=f"{dto.strftime('%Y-%m-%d')}T00:00:00+03:00",
+            user_ids=target_uids,
+        )
+
+        # Группировка по PORTAL_USER_ID
+        by_user: Dict[int, Dict[str, int]] = {
+            uid: {"calls_total": 0, "calls_answered": 0, "total_seconds": 0}
+            for uid in target_uids
+        }
+        for c in calls:
+            uid = _safe_int(c.get("PORTAL_USER_ID"))
+            if uid not in by_user:
+                continue
+            dur = _safe_int(c.get("CALL_DURATION"))
+            by_user[uid]["calls_total"] += 1
+            if dur > 0:
+                by_user[uid]["calls_answered"] += 1
+                by_user[uid]["total_seconds"] += dur
+
+        # Сборка результата
+        managers = []
+        for uid, stats in by_user.items():
+            ans = stats["calls_answered"]
+            total_sec = stats["total_seconds"]
+            avg_sec = round(total_sec / ans) if ans else 0
+            managers.append({
+                "manager": sales_uid_to_name.get(uid) or users_map.get(uid, {}).get("name", f"#{uid}"),
+                "calls_total": stats["calls_total"],
+                "calls_answered": ans,
+                "calls_missed": stats["calls_total"] - ans,
+                "total_minutes": round(total_sec / 60, 1),
+                "total_seconds": total_sec,
+                "avg_call_seconds": avg_sec,
+            })
+        managers.sort(key=lambda m: m["total_minutes"], reverse=True)
+
+        return {
+            "period": {"from": date_from, "to": date_to},
+            "managers": managers,
+            "note": (
+                "total_minutes — реальная длительность разговоров (CALL_DURATION>0). "
+                "calls_missed = всего минус отвеченные. Источник: "
+                "voximplant.statistic.get (Mango и другие подключённые АТС)."
+            ),
+        }
+
+    async def analyze_lead_calls(self, params: Dict[str, Any], user_context: Dict[str, Any]) -> Dict[str, Any]:
+        """Download + transcribe + AI-score every recorded call on a lead/deal."""
+        from mango_calls.pipeline import analyze_card_calls
+
+        lead_id = params.get("lead_id")
+        deal_id = params.get("deal_id")
+        if not lead_id and not deal_id:
+            return {"error": "укажите lead_id или deal_id"}
+        try:
+            owner_id = int(lead_id or deal_id)
+        except (TypeError, ValueError):
+            return {"error": "lead_id / deal_id должны быть числами"}
+        owner_type = 1 if lead_id else 2
+        try:
+            limit = int(params.get("limit") or 5)
+        except (TypeError, ValueError):
+            limit = 5
+        limit = max(1, min(limit, 15))
+
+        client = await self._get_client()
+        result = await analyze_card_calls(
+            owner_id=owner_id, owner_type_id=owner_type,
+            limit=limit, client=client,
+        )
+        # Trim transcripts to keep the LLM payload manageable
+        for c in result.get("calls", []):
+            if isinstance(c.get("transcript"), str) and len(c["transcript"]) > 1500:
+                c["transcript"] = c["transcript"][:1500] + "…"
+        result["note"] = (
+            "Расшифровки и оценки получены локальным Whisper + DeepSeek "
+            "по регламенту lead_reports/manager_call_script.md. Поле "
+            "manager_score — насколько менеджер следовал регламенту "
+            "(5 = полностью, 1 = практически не следовал)."
+        )
+        return result
+
+    async def sales_opportunities(self, params: Dict[str, Any], user_context: Dict[str, Any]) -> Dict[str, Any]:
+        """Stuck deals, stalled measurements, forgotten & untouched leads.
+
+        Surfaces concrete sales-growth points so the model can recommend
+        what to chase. Respects data isolation — a scoped user sees only
+        their own records; an admin / partner sees the whole CRM.
+        """
+        from sales_intel.detectors import collect_opportunities
+
+        b24_user_ids = user_context.get("b24_user_ids", [])
+        if not b24_user_ids and not _sees_all_crm(user_context):
+            return {"message": "No assigned users configured"}
+
+        assigned = [] if _sees_all_crm(user_context) else b24_user_ids
+        client = await self._get_client()
+        data = await collect_opportunities(assigned, client=client)
+
+        focus = (params.get("focus") or "all").strip()
+        sections = {"measurement_stalled", "stuck_deals", "cold_leads", "untouched_leads"}
+        if focus in sections:
+            data = {focus: data.get(focus, [])}
+
+        # Full counts, but cap each block so the LLM payload stays small.
+        counts = {k: len(v) for k, v in data.items() if isinstance(v, list)}
+        data = {k: (v[:15] if isinstance(v, list) else v) for k, v in data.items()}
+
+        return {
+            "opportunities": data,
+            "counts": counts,
+            "note": (
+                "Точки роста продаж. measurement_stalled — замер сделан, но "
+                "сделка стоит (приоритет №1). stuck_deals — застряли на стадии. "
+                "cold_leads — забытые активные лиды. untouched_leads — новые "
+                "лиды без первой реакции. Дай по каждому непустому блоку "
+                "короткую конкретную рекомендацию. counts — полное число; в "
+                "opportunities максимум 15 пунктов на блок."
+            ),
+        }
+
     async def count_deals_passed_stage(self, params: Dict[str, Any], user_context: Dict[str, Any]) -> Dict[str, Any]:
         """Count deals that passed through a given stage in a period.
 

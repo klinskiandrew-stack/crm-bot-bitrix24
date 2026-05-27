@@ -13,15 +13,20 @@ logger = structlog.get_logger()
 
 
 def _make_client():
-    """Choose LLM client per settings.llm_provider ('kie' default, 'deepseek')."""
-    provider = (settings.llm_provider or "kie").lower()
-    if provider == "deepseek":
-        if not settings.deepseek_api_key:
-            raise RuntimeError("llm_provider=deepseek but DEEPSEEK_API_KEY is empty")
-        logger.info("LLM provider initialized", provider="deepseek", model=settings.deepseek_model)
-        return DeepSeekClient()
-    logger.info("LLM provider initialized", provider="kie")
-    return KieAIClient()
+    """LLM client per settings.llm_provider — 'deepseek' by default.
+
+    The bot runs exclusively on DeepSeek; KieAIClient stays only as an
+    explicit opt-in fallback (llm_provider=kie in .env) and is otherwise
+    never instantiated.
+    """
+    provider = (settings.llm_provider or "deepseek").lower()
+    if provider == "kie":
+        logger.info("LLM provider initialized", provider="kie")
+        return KieAIClient()
+    if not settings.deepseek_api_key:
+        raise RuntimeError("llm_provider=deepseek but DEEPSEEK_API_KEY is empty")
+    logger.info("LLM provider initialized", provider="deepseek", model=settings.deepseek_model)
+    return DeepSeekClient()
 
 
 class Orchestrator:
@@ -139,11 +144,11 @@ class Orchestrator:
         # match the model that actually served (DeepSeek substitutes its own).
         # Seed actual_model from the provider config so audit_log is correct
         # even if the very first call fails before we see a response.model.
-        provider = (settings.llm_provider or "kie").lower()
-        if provider == "deepseek":
-            actual_model = settings.deepseek_model or model
-        else:
+        provider = (settings.llm_provider or "deepseek").lower()
+        if provider == "kie":
             actual_model = model
+        else:
+            actual_model = settings.deepseek_model or model
 
         trim_at = int(self.max_input_tokens * self.trim_threshold_ratio)
 
