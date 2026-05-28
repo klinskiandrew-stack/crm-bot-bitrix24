@@ -163,6 +163,56 @@ async def _run_manager_daily(bot: Bot) -> None:
         logger.error("Manager daily report job failed", error=str(e))
 
 
+async def _run_sales_comms_sync() -> None:
+    """Hourly: подтянуть свежие комментарии / activity / OL-сообщения по
+    активным сделкам в локальную БД. Берёт сделки которые синкались
+    более часа назад, чтобы равномерно крутить ~100 живых сделок."""
+    try:
+        from b24.client import Bitrix24Client
+        from sales_comms.collector import iter_active_deals, sync_deals_bulk
+        from sales_comms.db import deals_overdue_for_sync
+
+        client = Bitrix24Client()
+        try:
+            # Сначала смотрим тех, что вообще ни разу не синкались —
+            # фолбэк-режим после деплоя: deal_sync_state пустой, тянем
+            # текущий срез активных сделок.
+            overdue_ids = await deals_overdue_for_sync(older_than_minutes=60, limit=120)
+            if overdue_ids:
+                processed, added, calls = await sync_deals_bulk(
+                    client, overdue_ids, delay_between=0.3,
+                )
+                logger.info("sales_comms_sync overdue done",
+                            processed=processed, added=added, queued_calls=calls)
+            else:
+                deals = await iter_active_deals(client, max_items=120)
+                ids = [int(d["ID"]) for d in deals if d.get("ID")]
+                meta = {int(d["ID"]): d for d in deals if d.get("ID")}
+                processed, added, calls = await sync_deals_bulk(
+                    client, ids, deals_meta=meta, delay_between=0.3,
+                )
+                logger.info("sales_comms_sync initial done",
+                            processed=processed, added=added, queued_calls=calls)
+        finally:
+            try:
+                await client.close()
+            except Exception:
+                pass
+    except Exception as e:
+        logger.error("sales_comms_sync job failed", error=str(e))
+
+
+async def _run_sales_comms_transcribe() -> None:
+    """Every 5 min: жуёт до 3 pending-звонков из deal_communications."""
+    try:
+        from sales_comms.transcribe import run_batch
+        result = await run_batch(limit=3)
+        if result.get("processed"):
+            logger.info("sales_comms_transcribe done", **result)
+    except Exception as e:
+        logger.error("sales_comms_transcribe job failed", error=str(e))
+
+
 def start_report_scheduler(bot: Bot) -> Optional[AsyncIOScheduler]:
     """Build and start the scheduler. Returns the instance (or None if disabled)."""
     if not settings.reports_enabled or not settings.reports_chat_id:
@@ -236,6 +286,26 @@ def start_report_scheduler(bot: Bot) -> Optional[AsyncIOScheduler]:
             args=[bot],
             id="manager_daily",
             misfire_grace_time=3600,
+        )
+
+    # sales_comms: hourly sync of comments/activities/OL messages for
+    # active deals into local DB. Cheap (≤120 deals × 2 Bitrix calls);
+    # feeds the deals_status_digest LLM tool.
+    if settings.sales_comms_enabled:
+        scheduler.add_job(
+            _run_sales_comms_sync,
+            CronTrigger(minute=settings.sales_comms_sync_minute, timezone=tz),
+            id="sales_comms_sync",
+            misfire_grace_time=1800,
+        )
+        # Whisper для звонков — каждые 5 минут по 3 файла. Жёстко
+        # лимитировано через async lock в lead_reports/stt.py, чтобы
+        # не съесть RAM/CPU.
+        scheduler.add_job(
+            _run_sales_comms_transcribe,
+            CronTrigger(minute="*/5", timezone=tz),
+            id="sales_comms_transcribe",
+            misfire_grace_time=240,
         )
 
     # Weekly "sales opportunities" digest → РОП chat: stuck deals,

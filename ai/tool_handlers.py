@@ -288,6 +288,49 @@ class ToolHandlers:
             logger.error("Tool handler error", tool=tool_name, error=str(e))
             return {"error": str(e)}
 
+    async def deals_status_digest(self, params: Dict[str, Any], user_context: Dict[str, Any]) -> Dict[str, Any]:
+        """Готовая HTML-сводка по живым сделкам из локальной sales_comms БД.
+
+        В отличие от других инструментов, этот возвращает уже сформированный
+        текст — orchestrator должен отдать его пользователю как есть. Внутри
+        зовётся отдельный DeepSeek-проход (фоном к основному), чтобы не
+        раздувать input окна основного LLM-цикла.
+        """
+        from sales_comms.digest import build_digest
+
+        client = await self._get_client()
+        try:
+            limit = int(params.get("limit") or 80)
+        except (TypeError, ValueError):
+            limit = 80
+        limit = max(5, min(limit, 100))
+
+        try:
+            days_back = int(params.get("days_back")) if params.get("days_back") is not None else 7
+        except (TypeError, ValueError):
+            days_back = 7
+
+        result = await build_digest(
+            client=client,
+            manager_name=params.get("manager_name") or None,
+            days_back=days_back,
+            limit=limit,
+        )
+        # Возвращаем как text — orchestrator увидит и зеркалит пользователю.
+        # ВАЖНО: handler пересдаст текст; основной LLM-цикл не должен пытаться
+        # его перефразировать (см. описание tool schema).
+        return {
+            "digest_text": result["text"],
+            "deals_in_digest": result.get("deals_count", 0),
+            "comms_used": result.get("comms_count", 0),
+            "note_to_llm": (
+                "Выше — уже отформатированный для Telegram HTML-отчёт. "
+                "Отдай его пользователю ровно как есть, ничего не дописывая "
+                "и не перефразируя. Если хочется уточнить — можно добавить "
+                "одну короткую вступительную фразу перед отчётом."
+            ),
+        }
+
     async def manager_call_stats(self, params: Dict[str, Any], user_context: Dict[str, Any]) -> Dict[str, Any]:
         """Real phone-talk time per sales manager via voximplant.statistic.get."""
         err = _validate_params(params, date_keys=("date_from", "date_to"), stage_key="not_used")

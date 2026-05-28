@@ -181,3 +181,55 @@ CREATE TABLE IF NOT EXISTS lead_reports (
 );
 CREATE INDEX IF NOT EXISTS idx_lead_reports_status ON lead_reports(status);
 CREATE INDEX IF NOT EXISTS idx_lead_reports_call_dt ON lead_reports(call_datetime);
+
+-- =========================================================================
+-- sales_comms module: единая база коммуникаций по сделкам.
+--
+-- Накопляет на стороне бота все «прикосновения» менеджера к клиенту по
+-- конкретной сделке: комментарии в таймлайне, активити (звонки/задачи/
+-- письма), расшифровки звонков и сообщения из Open Lines (WhatsApp,
+-- Telegram, чат на сайте). Питается фоновым sales_comms_sync cron'ом,
+-- читается инструментом deals_status_digest когда РОП спрашивает «что
+-- происходит по моим сделкам».
+--
+-- Цель: один запрос пользователя ≠ десяток обращений к Bitrix. Бот
+-- читает уже готовую локальную БД, DeepSeek группирует факты.
+-- =========================================================================
+CREATE TABLE IF NOT EXISTS deal_communications (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    deal_id             INTEGER NOT NULL,
+    source_type         TEXT NOT NULL,         -- 'comment' | 'call' | 'task' | 'email' | 'openline'
+    source_id           TEXT NOT NULL,         -- ID объекта в Bitrix (activity, comment, im message)
+    direction           TEXT,                  -- 'in' | 'out' | NULL (для комментариев — NULL)
+    author_id           INTEGER,               -- Bitrix user id; NULL если клиент / автомат
+    author_name         TEXT,                  -- кэш имени для дайджеста, чтобы не дёргать users_map
+    occurred_at         TIMESTAMP NOT NULL,    -- когда событие случилось (МСК)
+    subject             TEXT,                  -- тема: для email/task — заголовок, для OL — имя линии
+    text                TEXT,                  -- тело: коммент/расшифровка звонка/тело email/сообщение OL
+    audio_url           TEXT,                  -- если звонок — ссылка на запись (для transcribe worker)
+    duration_sec        INTEGER,               -- длительность звонка
+    transcription_status TEXT,                 -- 'pending' | 'done' | 'failed' | 'n/a' (для не-звонков)
+    transcription_error TEXT,
+    raw_meta            TEXT,                  -- JSON с прочими полями activity/сообщения на случай если потом пригодится
+    synced_at           TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(source_type, source_id)
+);
+CREATE INDEX IF NOT EXISTS idx_dc_deal_time      ON deal_communications(deal_id, occurred_at DESC);
+CREATE INDEX IF NOT EXISTS idx_dc_pending        ON deal_communications(transcription_status) WHERE transcription_status = 'pending';
+CREATE INDEX IF NOT EXISTS idx_dc_source_type    ON deal_communications(source_type, occurred_at DESC);
+
+-- Состояние синка по сделке: чтобы инкрементально подтягивать новое и
+-- знать когда последний раз ходили. Без этого каждый sync будет
+-- перетягивать всю историю.
+CREATE TABLE IF NOT EXISTS deal_sync_state (
+    deal_id              INTEGER PRIMARY KEY,
+    last_synced_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    last_comment_id      INTEGER,              -- макс. ID комментария что мы уже знаем
+    last_activity_id     INTEGER,              -- макс. ID активности
+    last_openline_msg_id INTEGER,              -- макс. ID сообщения OL
+    deal_stage           TEXT,                 -- текущая стадия (для быстрого фильтра в digest)
+    deal_status_semantic TEXT,                 -- 'P' | 'S' | 'F' (process/success/fail) для skip закрытых
+    sync_error           TEXT                  -- последняя ошибка sync для отладки
+);
+CREATE INDEX IF NOT EXISTS idx_dss_synced ON deal_sync_state(last_synced_at);

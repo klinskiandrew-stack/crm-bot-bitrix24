@@ -98,6 +98,12 @@ class Settings(BaseSettings):
     manager_daily_hour: int = 9
     manager_daily_minute: int = 0
 
+    # sales_comms — единая база коммуникаций по сделкам (комментарии,
+    # звонки, активность, Open Lines). Питает инструмент
+    # deals_status_digest. Cron-sync включается флагом ниже.
+    sales_comms_enabled: bool = True
+    sales_comms_sync_minute: int = 17       # запуск каждый час на :17 (не лезет в другие cron'ы)
+
     stuck_deal_days: int = 14               # open deal not moved this long
     stuck_deal_max_days: int = 90           # older than this = dead, skip
     cold_lead_days: int = 2                 # active lead untouched this long
