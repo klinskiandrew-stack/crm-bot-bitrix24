@@ -18,7 +18,7 @@
 
 import os
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import structlog
 from aiohttp import web
@@ -64,12 +64,21 @@ async def dashboard_page(request: web.Request) -> web.Response:
     return web.FileResponse(DASHBOARD_HTML_PATH)
 
 
+def _json_compressed(data: Any, status: int = 200) -> web.Response:
+    """JSON-ответ с gzip-сжатием. /api/leads отдаёт 7+ MB — без gzip
+    на медленных каналах (Timeweb upstream ~12 KB/s наружу) клиенты
+    таймаутят. Жмёт в ~10 раз, цена — несколько мс CPU."""
+    resp = web.json_response(data, status=status)
+    resp.enable_compression()
+    return resp
+
+
 async def api_leads(request: web.Request) -> web.Response:
     err = _check_token(request)
     if err is not None:
         return err
     svc = get_service()
-    return web.json_response(svc.get_snapshot())
+    return _json_compressed(svc.get_snapshot())
 
 
 async def api_refresh(request: web.Request) -> web.Response:
@@ -78,7 +87,7 @@ async def api_refresh(request: web.Request) -> web.Response:
         return err
     svc = get_service()
     await svc.refresh()
-    return web.json_response({"ok": True, "last_refresh": svc.get_snapshot()["last_refresh"]})
+    return _json_compressed({"ok": True, "last_refresh": svc.get_snapshot()["last_refresh"]})
 
 
 async def api_comments(request: web.Request) -> web.Response:
@@ -94,7 +103,7 @@ async def api_comments(request: web.Request) -> web.Response:
         return web.json_response({"error": "bad kind"}, status=400)
     svc = get_service()
     comments = await svc.get_comments_for(kind, entity_id)
-    return web.json_response({"comments": comments})
+    return _json_compressed({"comments": comments})
 
 
 async def healthz(request: web.Request) -> web.Response:
