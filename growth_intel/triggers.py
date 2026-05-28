@@ -251,36 +251,146 @@ async def _save_triggers(
     return added
 
 
-async def _mark_satisfied_by_followup(deal_id: int) -> int:
-    """Триггеры считаем satisfied, если ПОСЛЕ detected_at в коммуникациях
-    есть исходящее действие менеджера: коммент, исходящее OL-сообщение,
-    исходящий звонок. Это эвристика — для отчёта «горит» этого достаточно.
-    Возвращает число обновлённых строк."""
-    cursor = await db.execute(
+# Категориально-специфичные паттерны для проверки реальной отработки.
+# Логика: триггер считается satisfied только если в коммуникациях ПОСЛЕ
+# detected_at есть конкретные признаки нужного действия. Просто «менеджер
+# что-то написал» — НЕ считается, иначе любой случайный коммент гасит сигнал.
+_PAY_PATTERNS = ("счёт", "счет", "invoice", "оплат", "перевод", "реквизит", "квитанц")
+_DECISION_FOLLOWUP = ("счёт", "счет", "оплат", "договор", "акт", "монтаж", "доставк", "приступа", "график работ")
+_OBJECTION_FOLLOWUP = ("скидк", "акци", "предлож", "альтернатив", "рассрочк", "вариант", "дешевле")
+
+
+async def _comms_after(deal_id: int, after_iso: str) -> List[Dict[str, Any]]:
+    """Все коммуникации по сделке, случившиеся ПОСЛЕ указанного времени."""
+    rows = await db.fetch_all(
         """
-        UPDATE growth_signals
-        SET satisfied = 1,
-            satisfied_at = (
-                SELECT MIN(occurred_at) FROM deal_communications
-                WHERE deal_id = growth_signals.deal_id
-                  AND occurred_at > growth_signals.detected_at
-                  AND (direction = 'out' OR source_type IN ('comment', 'task'))
-            ),
-            satisfied_note = 'auto: detected follow-up activity'
-        WHERE deal_id = ?
-          AND satisfied = 0
-          AND EXISTS (
-            SELECT 1 FROM deal_communications
-            WHERE deal_id = growth_signals.deal_id
-              AND occurred_at > growth_signals.detected_at
-              AND (direction = 'out' OR source_type IN ('comment', 'task'))
-          )
+        SELECT id, source_type, direction, occurred_at, subject, text
+        FROM deal_communications
+        WHERE deal_id = ? AND occurred_at > ?
+        ORDER BY occurred_at ASC
+        """,
+        (deal_id, after_iso),
+    )
+    return [dict(r) for r in rows or []]
+
+
+def _has_pattern(comms: List[Dict[str, Any]], patterns: tuple, *, outgoing_only: bool = True) -> bool:
+    """Есть ли в коммуникациях хотя бы одно сообщение/коммент с указанным
+    паттерном. outgoing_only=True — смотрим только исходящие от менеджера
+    + комменты (т.е. что менеджер реально что-то сделал, а не что клиент
+    о нём упомянул)."""
+    for c in comms:
+        if outgoing_only:
+            if c.get("direction") != "out" and c.get("source_type") not in ("comment", "task"):
+                continue
+        haystack = ((c.get("text") or "") + " " + (c.get("subject") or "")).lower()
+        if any(p in haystack for p in patterns):
+            return True
+    return False
+
+
+def _has_manager_reply_within(comms: List[Dict[str, Any]], hours: int) -> bool:
+    """Был ли ответ менеджера в течение N часов после момента триггера.
+    comms должны быть отсортированы ASC по времени."""
+    if not comms:
+        return False
+    first = comms[0]
+    # first.occurred_at — это первое событие после триггера; если оно
+    # пришло в пределах N часов И исходящее → считаем что менеджер ответил.
+    if first.get("direction") == "out" or first.get("source_type") in ("comment", "task"):
+        return True
+    return False
+
+
+async def _check_satisfied(trigger: Dict[str, Any]) -> Optional[str]:
+    """Проверить один триггер: реально ли отработан. Возвращает note для
+    satisfied (или None если не отработан)."""
+    deal_id = trigger["deal_id"]
+    category = trigger["category"]
+    detected_at = trigger["detected_at"]
+    comms_after = await _comms_after(deal_id, detected_at)
+
+    if not comms_after:
+        return None   # нет ни одного действия — точно не отработано
+
+    if category == "client_ready_to_pay":
+        # Должен появиться счёт, упоминание оплаты, реквизиты в исходящих
+        if _has_pattern(comms_after, _PAY_PATTERNS, outgoing_only=True):
+            return "счёт/оплата упомянуты в исходящих после сигнала"
+        # Или письмо/задача с темой про счёт
+        for c in comms_after:
+            if c.get("source_type") in ("email", "task"):
+                sub = (c.get("subject") or "").lower()
+                if any(p in sub for p in _PAY_PATTERNS):
+                    return f"задача/письмо «{c.get('subject')}»"
+        return None
+
+    if category == "decision_signal":
+        # Клиент сказал «беру» — менеджер должен запустить процесс: счёт,
+        # договор, акт, график работ. Просто «спасибо» не считаем.
+        if _has_pattern(comms_after, _DECISION_FOLLOWUP, outgoing_only=True):
+            return "запущен следующий шаг (счёт/договор/график)"
+        return None
+
+    if category in ("manager_promised_action", "client_promised_deadline"):
+        # Должно быть НОВОЕ исходящее действие менеджера после момента
+        # обещания. Простое «комментарий потом» подходит — это и есть
+        # отчёт о выполнении.
+        for c in comms_after:
+            if c.get("direction") == "out" or c.get("source_type") in ("comment", "task", "call"):
+                return "follow-up активность после обещания"
+        return None
+
+    if category == "client_question_unanswered":
+        # Менеджер ответил в течение 24 часов?
+        if _has_manager_reply_within(comms_after, hours=24):
+            return "менеджер ответил в течение суток"
+        return None
+
+    if category == "objection_not_handled":
+        # Менеджер должен предложить аргумент — скидку, альтернативу,
+        # отработку. Просто кивок не считаем.
+        if _has_pattern(comms_after, _OBJECTION_FOLLOWUP, outgoing_only=True):
+            return "возражение отработано (скидка/альтернатива/аргумент)"
+        return None
+
+    # Неизвестная категория — оставляем мягкое поведение
+    if _has_manager_reply_within(comms_after, hours=72):
+        return "общее последующее действие"
+    return None
+
+
+async def _mark_satisfied_by_followup(deal_id: int) -> int:
+    """Пройти по всем unsatisfied триггерам сделки и проверить, реально
+    ли менеджер отработал. Логика проверки — category-specific (см.
+    _check_satisfied выше). Возвращает число обновлённых строк."""
+    rows = await db.fetch_all(
+        """
+        SELECT id, deal_id, category, detected_at, deadline
+        FROM growth_signals
+        WHERE deal_id = ? AND satisfied = 0
         """,
         (deal_id,),
     )
-    rc = cursor.rowcount or 0
-    await db.commit()
-    return rc
+    updated = 0
+    for row in rows or []:
+        trigger = dict(row)
+        note = await _check_satisfied(trigger)
+        if note:
+            await db.execute(
+                """
+                UPDATE growth_signals
+                SET satisfied = 1,
+                    satisfied_at = CURRENT_TIMESTAMP,
+                    satisfied_note = ?
+                WHERE id = ?
+                """,
+                (note[:200], trigger["id"]),
+            )
+            updated += 1
+    if updated:
+        await db.commit()
+    return updated
 
 
 # ---------- публичная точка входа -----------------------------------------
