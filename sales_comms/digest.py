@@ -233,7 +233,11 @@ async def call_deepseek(context: str) -> str:
         "Content-Type": "application/json",
     }
     try:
-        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=120)) as s:
+        # 240с (вместо стандартных 120) — на 60+ сделках DeepSeek
+        # реально думает 90-150 секунд. Прерывание по таймауту хуже,
+        # чем медленный ответ: пользователь увидит ошибку и пойдёт
+        # просить сводку повторно — потратит токены дважды.
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=240)) as s:
             async with s.post(url, json=body, headers=headers) as resp:
                 text = await resp.text()
                 if resp.status != 200:
