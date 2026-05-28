@@ -121,7 +121,11 @@ class Settings(BaseSettings):
     max_iterations: int = 5
     max_request_input_tokens: int = 150_000  # cumulative across iterations
     max_request_credits: float = 30.0        # cumulative across iterations
-    max_tool_calls_per_request: int = 8      # total tool invocations per request
+    max_tool_calls_per_request: int = 12     # total tool invocations per request
+    # Поднято с 8 → 12 после анализа отладки 2026-05: аналитические вопросы
+    # ("прогноз продаж на май", "статистика Авито с замерами") честно
+    # требуют 9-11 вызовов (несколько get_deals по стадиям + сводки).
+    # На уровне токенов их ограничивает max_request_input_tokens.
 
     # Circuit breaker — Level 3 (global daily)
     daily_global_credits_limit: float = 5000.0  # ~$25 at 1cr=$0.005
