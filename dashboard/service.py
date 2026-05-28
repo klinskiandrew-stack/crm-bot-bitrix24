@@ -32,8 +32,11 @@ _MSK = timezone(timedelta(hours=3))
 DEFAULT_LOOKBACK_DAYS = 365
 
 # Сколько лидов/сделок максимум вытащить на канал за обновление.
-LEAD_FETCH_LIMIT = 1000
-DEAL_FETCH_LIMIT = 500
+# Свежие лиды отдают первыми (order_by_date_desc=True), поэтому при
+# превышении лимита обрезается старый хвост — это безопаснее, чем
+# терять "сегодняшние" лиды как было до фикса.
+LEAD_FETCH_LIMIT = 2500
+DEAL_FETCH_LIMIT = 1500
 
 # Сколько последних карточек подгружать с таймлайном сразу (остальные —
 # по клику в UI через /api/comments/...).
@@ -214,6 +217,7 @@ class DashboardService:
             filter_by_source_ids=channel["source_ids"],
             filter_by_utm_source=channel.get("utm_source"),
             include_full_utm=True,
+            order_by_date_desc=True,  # свежие первыми, чтобы лимит не отрезал актуал
             limit=LEAD_FETCH_LIMIT,
         )
         if not isinstance(leads, list):
@@ -233,6 +237,7 @@ class DashboardService:
             filter_by_date_from=date_from,
             filter_by_source_ids=channel["source_ids"],
             filter_by_utm_source=channel.get("utm_source"),
+            order_by_date_desc=True,
             limit=DEAL_FETCH_LIMIT,
         )
         if not isinstance(deals, list):

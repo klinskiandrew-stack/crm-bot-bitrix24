@@ -216,6 +216,7 @@ class Bitrix24Client:
         filter_by_moved_before: Optional[str] = None,
         filter_by_moved_after: Optional[str] = None,
         only_open: bool = False,
+        order_by_date_desc: bool = False,
         limit: int = 50,
         return_total: bool = False,
     ):
@@ -280,6 +281,10 @@ class Bitrix24Client:
             params["filter"]["<=MOVED_TIME"] = filter_by_moved_before
         if filter_by_moved_after:
             params["filter"][">=MOVED_TIME"] = filter_by_moved_after
+        # Bitrix default sort = ID ASC. Дашборду нужны свежие сделки —
+        # при limit на большом канале без сортировки старые отрезают новые.
+        if order_by_date_desc:
+            params["order"] = {"DATE_CREATE": "DESC"}
 
         items, total = await self._paginate("crm.deal.list", params, limit=limit, max_items=limit)
         if isinstance(items, dict) and "error" in items:
@@ -309,6 +314,7 @@ class Bitrix24Client:
         filter_by_modified_before: Optional[str] = None,
         filter_by_modified_after: Optional[str] = None,
         include_full_utm: bool = False,
+        order_by_date_desc: bool = False,
         limit: int = 50,
         return_total: bool = False,
     ):
@@ -382,6 +388,11 @@ class Bitrix24Client:
             params["filter"]["<=DATE_MODIFY"] = filter_by_modified_before
         if filter_by_modified_after:
             params["filter"][">=DATE_MODIFY"] = filter_by_modified_after
+        # Bitrix default sort = ID ASC (старые первые). При limit, упирающемся
+        # в большой канал, новые лиды отсекаются. order_by_date_desc=True
+        # просит свежие первыми — нужно дашборду.
+        if order_by_date_desc:
+            params["order"] = {"DATE_CREATE": "DESC"}
 
         items, total = await self._paginate("crm.lead.list", params, limit=limit, max_items=limit)
         if isinstance(items, dict) and "error" in items:
