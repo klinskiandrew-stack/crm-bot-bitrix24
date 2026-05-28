@@ -237,11 +237,16 @@ class DeepSeekClient:
 
         # Retry on 429 (rate limit) and 5xx (transient). DeepSeek uses
         # dynamic concurrency limits — 429 is a normal back-pressure signal,
-        # not a quota exhaustion.
+        # not a quota exhaustion. 503 "Service is too busy" recovers slowly
+        # (DeepSeek peak hours can stay degraded for 30-60s), so we do up to
+        # 5 attempts with exponential back-off: ~1s / 3s / 9s / 27s / 45s
+        # (capped) plus ±20% jitter. Total worst-case wait ~85s, which is
+        # what we saw historically before the bot would have stopped trying.
         raw = None
         resp_status = None
         last_err = None
-        for attempt in range(3):
+        _BACKOFF = (1.0, 3.0, 9.0, 27.0, 45.0)
+        for attempt in range(len(_BACKOFF)):
             try:
                 async with self._session.post(
                     f"{self.base_url}/chat/completions",
@@ -262,9 +267,10 @@ class DeepSeekClient:
 
                 if resp_status == 429 or 500 <= resp_status < 600:
                     last_err = f"DeepSeek API {resp_status}: {str(raw)[:200]}"
-                    if attempt < 2:
-                        delay = (2 ** attempt) + random.random() * 0.5
-                        logger.warning("DeepSeek transient error, retrying", attempt=attempt, status=resp_status, delay=delay)
+                    if attempt < len(_BACKOFF) - 1:
+                        base = _BACKOFF[attempt]
+                        delay = base * (0.8 + random.random() * 0.4)  # ±20% jitter
+                        logger.warning("DeepSeek transient error, retrying", attempt=attempt, status=resp_status, delay=round(delay, 2))
                         await asyncio.sleep(delay)
                         continue
 
@@ -276,9 +282,10 @@ class DeepSeekClient:
                 break  # success
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
                 last_err = str(e)
-                if attempt < 2:
-                    delay = (2 ** attempt) + random.random() * 0.5
-                    logger.warning("DeepSeek network error, retrying", attempt=attempt, error=str(e), delay=delay)
+                if attempt < len(_BACKOFF) - 1:
+                    base = _BACKOFF[attempt]
+                    delay = base * (0.8 + random.random() * 0.4)
+                    logger.warning("DeepSeek network error, retrying", attempt=attempt, error=str(e), delay=round(delay, 2))
                     await asyncio.sleep(delay)
                     continue
                 raise
