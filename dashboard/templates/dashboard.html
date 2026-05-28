@@ -291,6 +291,82 @@
   }
   .funnel-graph-overall .sum-part { margin-left: 16px; }
 
+  /* Переключатель режима период (когорта / sales-period). */
+  .mode-switcher {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 14px;
+    margin-bottom: 8px;
+    display: flex;
+    gap: 16px;
+    flex-wrap: wrap;
+    align-items: center;
+    font-size: 12px;
+  }
+  .mode-switcher-label {
+    color: var(--muted);
+    text-transform: uppercase;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+  }
+  .mode-radio {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+    user-select: none;
+    color: var(--text);
+  }
+  .mode-radio input[type="radio"] {
+    accent-color: var(--accent);
+    margin: 0;
+  }
+  .mode-radio input[type="radio"]:checked + span {
+    font-weight: 600;
+    color: var(--accent);
+  }
+  .help-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px; height: 16px;
+    border-radius: 50%;
+    background: var(--cream);
+    color: var(--bark);
+    font-size: 10px;
+    font-weight: 700;
+    cursor: help;
+    border: 1px solid var(--border);
+    position: relative;
+  }
+  .help-icon:hover { background: var(--gold); color: var(--dark); border-color: var(--gold); }
+  .help-icon::after {
+    content: attr(data-tooltip);
+    position: absolute;
+    top: 22px; left: 50%;
+    transform: translateX(-50%);
+    background: var(--dark);
+    color: var(--cream);
+    padding: 8px 12px;
+    border-radius: 6px;
+    font-size: 11px;
+    font-weight: 400;
+    line-height: 1.45;
+    white-space: normal;
+    width: 280px;
+    text-align: left;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.15s;
+    z-index: 100;
+    text-transform: none;
+    letter-spacing: 0;
+  }
+  .help-icon:hover::after { opacity: 1; }
+
   .filters {
     background: var(--panel);
     border: 1px solid var(--border);
@@ -454,6 +530,21 @@
     <div id="funnel" class="funnel"></div>
   </details>
 
+  <!-- Переключатель: как считать период (когорта / sales-period). -->
+  <div class="mode-switcher">
+    <span class="mode-switcher-label">Период применить к:</span>
+    <label class="mode-radio">
+      <input type="radio" name="period-mode" value="cohort" checked>
+      <span>Когорте по дате создания</span>
+      <span class="help-icon" data-tooltip="Когортный анализ — берём лиды/сделки, СОЗДАННЫЕ в этом периоде. Сразу видна качество источника. Минус: продажи по свежим лидам ещё впереди — длинный цикл сделки занижает CR. Используй для оценки трафика.">?</span>
+    </label>
+    <label class="mode-radio">
+      <input type="radio" name="period-mode" value="stage">
+      <span>Дате перехода стадии</span>
+      <span class="help-icon" data-tooltip="Sales-period анализ — для ЗАМЕРОВ берём те, что прошли стадию «Замер выполнен» в этом периоде. Для ПРОДАЖ — те, что прошли «Договор заключён». Лиды считаются по дате создания. Используй чтобы увидеть фактический cash flow и cколько денег пришло за месяц.">?</span>
+    </label>
+  </div>
+
   <div class="filters">
     <label>Источник
       <select id="filter-channel">
@@ -615,16 +706,78 @@ function semanticClass(sem) {
   }
 }
 
-function computeStats(leads, deals) {
+function currentPeriodMode() {
+  const r = document.querySelector('input[name="period-mode"]:checked');
+  return r ? r.value : 'cohort';
+}
+
+function dateInCurrentPeriod(iso) {
+  // Возвращает true если ISO timestamp попадает в выбранный период фильтра
+  // (тот же, что в passesFilters). Возвращает false если периода нет или дата пуста.
+  if (!iso) return false;
+  const period = document.getElementById('filter-period').value;
+  const dateFrom = document.getElementById('filter-date-from').value;
+  const dateTo = document.getElementById('filter-date-to').value;
+  const dt = new Date(iso);
+  if (isNaN(dt.getTime())) return false;
+  if (period === 'custom') {
+    if (dateFrom && dt < new Date(dateFrom + 'T00:00:00')) return false;
+    if (dateTo && dt > new Date(dateTo + 'T23:59:59')) return false;
+    return true;
+  }
+  if (!period) return true;  // «всё»
+  const now = new Date();
+  if (period === 'today') return dt.toDateString() === now.toDateString();
+  const days = parseInt(period, 10);
+  return (now - dt) / (1000 * 60 * 60 * 24) <= days;
+}
+
+function daysBetween(isoStart, isoEnd) {
+  if (!isoStart || !isoEnd) return null;
+  const a = new Date(isoStart), b = new Date(isoEnd);
+  if (isNaN(a.getTime()) || isNaN(b.getTime())) return null;
+  return Math.round((b - a) / (1000 * 60 * 60 * 24));
+}
+
+function median(xs) {
+  if (!xs.length) return null;
+  const sorted = xs.slice().sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[mid] : Math.round((sorted[mid - 1] + sorted[mid]) / 2);
+}
+
+function computeStats(leads, deals, allDeals) {
+  // leads/deals — это УЖЕ отфильтрованные (passesFilters прошли).
+  // allDeals — все сделки в кэше: нужно для sales-period режима,
+  // т.к. сделка для "продажи в мае" могла быть создана в феврале и
+  // не пройти стандартный фильтр периода.
+  const mode = currentPeriodMode();
   const todayStr = new Date().toISOString().slice(0, 10);
   const isToday = r => (r.created || '').slice(0, 10) === todayStr;
-  // "Продажа" = сделка проходила через стадию "Договор заключён"
-  // (PREPARATION). Это исторический факт — даже если сделка ушла
-  // дальше или провалена, она засчитывается.
-  const salesDeals = deals.filter(d => d.passed_contract);
-  const measurementDeals = deals.filter(d => d.passed_measurement);
   const qualifiedLeads = leads.filter(l => l.is_qualified);
+
+  // В режиме «когорта» воронка берётся из текущей deal-выборки (отфильтрованной
+  // по дате создания сделки). В режиме «sales-period» — из ВСЕХ кэшированных
+  // сделок, у которых дата прохождения стадии попадает в выбранный период.
+  let salesDeals, measurementDeals;
+  if (mode === 'stage') {
+    // Уважаем все остальные фильтры (канал/менеджер/UTM/...), но не период.
+    const pool = (allDeals || deals).filter(d => passesFilters(d, false, { skipPeriod: true }));
+    salesDeals = pool.filter(d => d.passed_contract && dateInCurrentPeriod(d.contract_signed_at));
+    measurementDeals = pool.filter(d => d.passed_measurement && dateInCurrentPeriod(d.measurement_done_at));
+  } else {
+    salesDeals = deals.filter(d => d.passed_contract);
+    measurementDeals = deals.filter(d => d.passed_measurement);
+  }
+
+  // Time-to-Sale: медиана дней от DATE_CREATE сделки до contract_signed_at.
+  const ttsList = salesDeals
+    .map(d => daysBetween(d.created, d.contract_signed_at))
+    .filter(x => x != null && x >= 0);
+  const ttsMedian = median(ttsList);
+
   return {
+    mode,
     leads_total: leads.length,
     leads_today: leads.filter(isToday).length,
     deals_total: deals.length,
@@ -633,6 +786,8 @@ function computeStats(leads, deals) {
     measurements_done: measurementDeals.length,
     sales_count: salesDeals.length,
     sales_sum: salesDeals.reduce((a, d) => a + (d.opportunity || 0), 0),
+    time_to_sale_median: ttsMedian,
+    time_to_sale_samples: ttsList.length,
   };
 }
 
@@ -660,9 +815,19 @@ function channelLabel() {
   return ch ? ch.label : code;
 }
 
-function renderStats(filteredLeads, filteredDeals) {
-  const s = computeStats(filteredLeads, filteredDeals);
+function modeLabel() {
+  return currentPeriodMode() === 'stage' ? 'дата стадии' : 'дата создания';
+}
+
+function renderStats(filteredLeads, filteredDeals, allDeals) {
+  const s = computeStats(filteredLeads, filteredDeals, allDeals);
   const salesSum = s.sales_sum ? fmtMoney(s.sales_sum) : '—';
+  const ttsValue = s.time_to_sale_median != null
+    ? `${s.time_to_sale_median} дн.`
+    : '—';
+  const ttsSub = s.time_to_sale_samples
+    ? `медиана по ${s.time_to_sale_samples} ${ruPlural(s.time_to_sale_samples, 'продаже', 'продажам', 'продажам')}`
+    : 'данных нет';
   document.getElementById('stats').innerHTML = `
     <div class="stat">
       <div class="label">Лиды (в выборке)</div>
@@ -680,13 +845,27 @@ function renderStats(filteredLeads, filteredDeals) {
       <div class="sub">${salesSum}</div>
     </div>
     <div class="stat">
-      <div class="label">Канал</div>
+      <div class="label">Время до продажи</div>
+      <div class="value">${ttsValue}</div>
+      <div class="sub">${ttsSub}</div>
+    </div>
+    <div class="stat">
+      <div class="label">Канал · режим</div>
       <div class="value" style="font-size:16px">${escapeHtml(channelLabel())}</div>
-      <div class="sub">Период: ${escapeHtml(periodLabel())}</div>
+      <div class="sub">Период: ${escapeHtml(periodLabel())} · ${escapeHtml(modeLabel())}</div>
     </div>
   `;
   renderGraphFunnel(s);
   renderFunnel(s);
+}
+
+function ruPlural(n, one, few, many) {
+  const m = Math.abs(n) % 100;
+  const m10 = m % 10;
+  if (m >= 11 && m <= 14) return many;
+  if (m10 === 1) return one;
+  if (m10 >= 2 && m10 <= 4) return few;
+  return many;
 }
 
 function renderGraphFunnel(s) {
@@ -863,7 +1042,10 @@ function rebuildFilterOptions() {
   fillFilterOptions('filter-utm-term', [...sets.utmTerm].sort());
 }
 
-function passesFilters(row, isLead) {
+function passesFilters(row, isLead, opts) {
+  // opts.skipPeriod=true — пропустить только фильтр периода (используется в
+  // sales-period режиме computeStats для воронки и таблицы сделок).
+  opts = opts || {};
   const f = {
     search: document.getElementById('filter-search').value.trim().toLowerCase(),
     status: document.getElementById('filter-status').value,
@@ -903,9 +1085,21 @@ function passesFilters(row, isLead) {
     if (!bag.includes(f.search)) return false;
   }
 
-  // Период
+  if (opts.skipPeriod) return true;
+
+  // Какую дату использовать для фильтра периода?
+  // - Лиды: всегда DATE_CREATE
+  // - Сделки: зависит от режима:
+  //     cohort → DATE_CREATE сделки (создана в периоде)
+  //     stage  → contract_signed_at если есть, иначе measurement_done_at,
+  //              иначе DATE_CREATE (для активных сделок без переходов)
+  let dateStr = row.created;
+  if (!isLead && currentPeriodMode() === 'stage') {
+    dateStr = row.contract_signed_at || row.measurement_done_at || row.created;
+  }
+
   if (f.period === 'custom') {
-    const created = row.created ? new Date(row.created) : null;
+    const created = dateStr ? new Date(dateStr) : null;
     if (!created) return false;
     if (f.dateFrom) {
       const from = new Date(f.dateFrom + 'T00:00:00');
@@ -916,8 +1110,8 @@ function passesFilters(row, isLead) {
       if (created > to) return false;
     }
   } else if (f.period) {
-    if (!row.created) return false;
-    const created = new Date(row.created);
+    if (!dateStr) return false;
+    const created = new Date(dateStr);
     const now = new Date();
     if (f.period === 'today') {
       if (created.toDateString() !== now.toDateString()) return false;
@@ -1107,7 +1301,7 @@ function render() {
     ' · кэш: ' + state.data.lookback_days + ' дней' +
     (state.data.last_error ? ' · ошибка: ' + state.data.last_error : '');
 
-  renderStats(filteredLeads, filteredDeals);
+  renderStats(filteredLeads, filteredDeals, state.data.deals);
   renderLeads(sortedLeads);
   renderDeals(sortedDeals);
   renderSortIndicators('leads-head', state.sort.leads);
@@ -1158,6 +1352,22 @@ document.querySelectorAll('.tab').forEach(t => {
   el.addEventListener('input', handler);
   el.addEventListener('change', handler);
 });
+
+// Радио-переключатель режима периода (cohort/stage).
+document.querySelectorAll('input[name="period-mode"]').forEach(r => {
+  r.addEventListener('change', () => {
+    localStorage.setItem('dashboard-period-mode', r.value);
+    render();
+  });
+});
+// Восстановление выбранного ранее режима.
+{
+  const savedMode = localStorage.getItem('dashboard-period-mode');
+  if (savedMode === 'stage' || savedMode === 'cohort') {
+    const r = document.querySelector(`input[name="period-mode"][value="${savedMode}"]`);
+    if (r) r.checked = true;
+  }
+}
 
 document.getElementById('reset-filters').addEventListener('click', () => {
   ['filter-search','filter-status','filter-manager','filter-webform','filter-channel',
