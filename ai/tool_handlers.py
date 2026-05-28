@@ -170,6 +170,30 @@ def _validate_params(params: Dict[str, Any], date_keys=("filter_by_date_from", "
     return None
 
 
+# Поля, которые в карточках лидов/сделок бывают многострочными или
+# содержат сырой UTM-мусор. На входе в LLM их обрезаем — иначе один
+# запрос с list-методом на 30-50 карточек съедает 20-40K input-токенов
+# и упирается в circuit_breaker_per_request:input_tokens. (Дашборд /
+# Excel-экспорт берут полные значения напрямую из Bitrix, не через
+# tool_handlers, поэтому здесь резать безопасно.)
+_LONG_FIELD_CAPS = {
+    "COMMENTS": 200,
+    "SOURCE_DESCRIPTION": 120,
+    "UTM_CONTENT": 100,
+    "UTM_TERM": 100,
+    "DESCRIPTION": 200,
+}
+
+
+def _trim_long_fields(card: Dict[str, Any]) -> Dict[str, Any]:
+    """In-place truncate verbose textual fields. Adds '…' suffix when cut."""
+    for key, cap in _LONG_FIELD_CAPS.items():
+        v = card.get(key)
+        if isinstance(v, str) and len(v) > cap:
+            card[key] = v[:cap].rstrip() + "…"
+    return card
+
+
 class ToolHandlers:
     """Handle tool calls from Claude."""
 
@@ -518,6 +542,7 @@ class ToolHandlers:
             junk_reason_id = _safe_int(d.get("UF_CRM_67C71B6E2224F"))
             d["junk_reason"] = DEAL_JUNK_REASONS.get(junk_reason_id, "") if junk_reason_id else ""
             d["manager"] = _resolve_manager(d.get("ASSIGNED_BY_ID"), users_map)
+            _trim_long_fields(d)
             enriched.append(d)
 
         out = {
@@ -597,6 +622,7 @@ class ToolHandlers:
                 l.get("UF_CRM_1696239286"), LEAD_DIRECTIONS,
             )
             l["manager"] = _resolve_manager(l.get("ASSIGNED_BY_ID"), users_map)
+            _trim_long_fields(l)
             enriched.append(l)
 
         out = {
