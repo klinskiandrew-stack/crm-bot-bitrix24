@@ -28,6 +28,29 @@ logger = structlog.get_logger()
 router = Router()
 orchestrator = Orchestrator()
 
+
+async def _safe_reply(message: types.Message, text: str, **kwargs) -> "types.Message | None":
+    """message.reply() with fallback to plain send_message when Telegram
+    can't find the original message anymore (long-running orchestrator
+    finishes after the user already deleted their message, OR after our
+    LLM provider returned 503 and the retry chain finally answered with
+    delay > 60s). Returns the sent message or None on irrecoverable error.
+    """
+    try:
+        return await message.reply(text, **kwargs)
+    except Exception as e:
+        emsg = str(e).lower()
+        if "message to be replied" in emsg or "message to reply" in emsg or "reply message not found" in emsg:
+            logger.info("Reply target lost, falling back to send_message", error=str(e))
+            try:
+                # Drop reply_to_message_id and resend in the same chat.
+                kwargs.pop("reply_to_message_id", None)
+                return await message.bot.send_message(message.chat.id, text, **kwargs)
+            except Exception as e2:
+                logger.warning("send_message fallback also failed", error=str(e2))
+                return None
+        raise
+
 # Bot identity cache (resolved once at first message).
 _bot_identity: dict = {"id": None, "username": None}
 
@@ -436,9 +459,9 @@ async def process_question(
         formatted = _markdown_to_telegram_html(answer)[:4096]
         if placeholder is None:
             try:
-                await message.reply(formatted, parse_mode=ParseMode.HTML)
+                await _safe_reply(message, formatted, parse_mode=ParseMode.HTML)
             except Exception:
-                await message.reply(answer[:4096])
+                await _safe_reply(message, answer[:4096])
         else:
             try:
                 await placeholder.edit_text(formatted, parse_mode=ParseMode.HTML)
@@ -448,7 +471,7 @@ async def process_question(
                     await placeholder.edit_text(answer[:4096])
                 except Exception as plain_err:
                     logger.warning("Plain edit also failed, sending new message", error=str(plain_err))
-                    await message.reply(answer[:4096])
+                    await _safe_reply(message, answer[:4096])
 
         logger.info(
             "Group message processed",
@@ -481,7 +504,7 @@ async def process_question(
             except Exception:
                 pass
         try:
-            await message.reply("⚠️ Ошибка при обработке вопроса. Попробуйте позже.")
+            await _safe_reply(message, "⚠️ Ошибка при обработке вопроса. Попробуйте позже.")
         except Exception:
             logger.warning("Could not send error reply either")
 
