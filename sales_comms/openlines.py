@@ -32,9 +32,16 @@ from sales_comms.db import Communication
 logger = structlog.get_logger()
 
 
-# Bitrix Bb-разметка в сообщениях ботов: [b]…[/b], [url=…]…[/url], переносы.
-_BB_TAG_RE = re.compile(r"\[/?(b|i|u|s|color|size|url|img|code)[^\]]*\]", re.IGNORECASE)
+# Bitrix BB-разметка в сообщениях ботов:
+#   inline:  [b][/b], [i], [u], [s], [color=...][/color], [size=N][/size]
+#   block:   [p][/p] (paragraph), [code], [img]
+#   ссылки:  [url=...]label[/url]
+_BB_TAG_RE = re.compile(
+    r"\[/?(b|i|u|s|color|size|url|img|code|p|br|quote|spoiler|font|disk)[^\]]*\]",
+    re.IGNORECASE,
+)
 _URL_BB_RE = re.compile(r"\[url=([^\]]+)\]([^\[]*)\[/url\]", re.IGNORECASE)
+_MULTI_NL_RE = re.compile(r"\n{3,}")
 
 
 def _clean_bb(text: Optional[str]) -> str:
@@ -43,6 +50,9 @@ def _clean_bb(text: Optional[str]) -> str:
         return ""
     out = _URL_BB_RE.sub(r"\2 (\1)", text)
     out = _BB_TAG_RE.sub("", out)
+    # Bitrix часто шлёт [p]...[/p] вокруг блоков — после удаления остаются
+    # тройные переводы строк, сжимаем.
+    out = _MULTI_NL_RE.sub("\n\n", out)
     return out.strip()
 
 

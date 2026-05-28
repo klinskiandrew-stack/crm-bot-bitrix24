@@ -39,12 +39,17 @@ logger = structlog.get_logger()
 
 
 # crm.activity TYPE_ID → наш source_type. См. также reports/manager_daily.py.
+# Заметка: TYPE_ID=6 (CHAT) — это ВНУТРЕННИЙ чат-комментарий менеджера к
+# карточке. Не путать с Open Lines сообщениями: те приходят через
+# PROVIDER_ID='IMOPENLINES_SESSION' (см. _is_openline_session ниже),
+# и реальные тексты к ним берутся отдельным запросом
+# imopenlines.session.history.get.
 _ACTIVITY_TYPE_MAP = {
-    1: ("task", "Встреча"),    # MEETING. У Growzone редко, но возможны.
+    1: ("task", "Встреча"),
     2: ("call", "Звонок"),
     3: ("task", "Задача"),
     4: ("email", "Письмо"),
-    6: ("openline", "Чат"),    # внутренний CHAT activity (не путать с OL-сообщениями)
+    6: ("comment", "Внутренний чат"),
 }
 
 # Стадии, которые считаем «активными». См. также digest.py и
@@ -70,15 +75,29 @@ def _parse_bitrix_dt(s: Any) -> Optional[datetime]:
 
 
 def _strip_html(text: Optional[str]) -> str:
-    """Bitrix хранит DESCRIPTION писем как HTML. Минимально вычищаем теги,
-    чтобы LLM не получала разметку (она съест токены не на пользу делу).
-    Если потом понадобится сохранить кликабельные ссылки — расширим."""
+    """Чистка одновременно HTML (письма) и BB-разметки (комментарии
+    карточки, чат-активити). Сохраняем переносы абзацев, схлопываем
+    тройные переводы."""
     if not text:
         return ""
     import re
+    # HTML
     out = re.sub(r"<br\s*/?>", "\n", text, flags=re.IGNORECASE)
     out = re.sub(r"</p\s*>", "\n", out, flags=re.IGNORECASE)
     out = re.sub(r"<[^>]+>", "", out)
+    # BB-разметка Bitrix: [p], [b], [url=...]..[/url], [color], [size], …
+    out = re.sub(
+        r"\[url=([^\]]+)\]([^\[]*)\[/url\]",
+        r"\2 (\1)",
+        out,
+        flags=re.IGNORECASE,
+    )
+    out = re.sub(
+        r"\[/?(b|i|u|s|color|size|url|img|code|p|br|quote|spoiler|font|disk)[^\]]*\]",
+        "",
+        out,
+        flags=re.IGNORECASE,
+    )
     out = re.sub(r"\n{3,}", "\n\n", out)
     return out.strip()
 
@@ -290,6 +309,10 @@ async def sync_deal(
                 "PROVIDER_ID", "PROVIDER_TYPE_ID", "FILES",
                 "CREATED", "START_TIME", "END_TIME",
                 "RESPONSIBLE_ID", "DESCRIPTION", "COMPLETED",
+                # СРАЗ нужно для openline-сессий: тут лежит session_id,
+                # по которому потом подтягиваем сообщения через
+                # imopenlines.session.history.get
+                "ASSOCIATED_ENTITY_ID",
             ],
             "order": {"ID": "DESC"},
         })
