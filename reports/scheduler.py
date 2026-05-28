@@ -213,6 +213,16 @@ async def _run_sales_comms_transcribe() -> None:
         logger.error("sales_comms_transcribe job failed", error=str(e))
 
 
+async def _run_sales_comms_progress_notify(bot: Bot) -> None:
+    """Hourly: компактная сводка прогресса sales_comms + growth_intel
+    в личку админа. Молчит если за час ничего не изменилось."""
+    try:
+        from sales_comms.notifier import send_hourly_progress
+        await send_hourly_progress(bot)
+    except Exception as e:
+        logger.error("sales_comms progress notify failed", error=str(e))
+
+
 async def _run_growth_intel_digest(bot: Bot) -> None:
     """Weekly: построить growth_intel дайджест и послать в чат РОПа.
 
@@ -334,6 +344,16 @@ def start_report_scheduler(bot: Bot) -> Optional[AsyncIOScheduler]:
             CronTrigger(minute="*/5", timezone=tz),
             id="sales_comms_transcribe",
             misfire_grace_time=240,
+        )
+        # Часовая сводка прогресса в личку админа (sales_comms + growth_intel).
+        # На :45, чтобы данные после sync (:17) и нескольких Whisper-проходов
+        # уже были свежие. Молчит если за час ничего не изменилось.
+        scheduler.add_job(
+            _run_sales_comms_progress_notify,
+            CronTrigger(minute=45, timezone=tz),
+            args=[bot],
+            id="sales_comms_progress_notify",
+            misfire_grace_time=600,
         )
 
     # Weekly growth_intel digest — «где растут деньги, где теряются».
