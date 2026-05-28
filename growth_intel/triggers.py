@@ -180,16 +180,22 @@ async def _call_deepseek(comms_text: str) -> List[Dict[str, Any]]:
 
 
 def _parse_date(s: Any) -> Optional[datetime]:
+    """Парсим Bitrix-дату и СРАЗУ снимаем tzinfo — в БД и в cutoff
+    (datetime.now()) везде живут naive datetime'ы, сравнения aware vs
+    naive падают TypeError. Bitrix даёт +03:00, но всё равно семантика
+    МСК, разница в tz-info нам неважна для отчёта."""
     if not s or s in ("null", "none", "None"):
         return None
     try:
-        return datetime.fromisoformat(str(s))
+        dt = datetime.fromisoformat(str(s))
     except ValueError:
-        # На случай YYYY-MM-DD
         try:
-            return datetime.strptime(str(s), "%Y-%m-%d")
+            dt = datetime.strptime(str(s), "%Y-%m-%d")
         except ValueError:
             return None
+    if dt.tzinfo is not None:
+        dt = dt.replace(tzinfo=None)
+    return dt
 
 
 def _normalize(raw: Dict[str, Any]) -> Optional[Trigger]:
