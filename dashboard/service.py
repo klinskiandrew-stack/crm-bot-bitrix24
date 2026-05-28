@@ -533,10 +533,14 @@ class DashboardService:
             "rejection_reason": self._resolve_rejection(lead.get(REJECTION_REASON_UF)),
             "rejection_reason_detail": str(lead.get(REJECTION_REASON_DETAIL_UF) or ""),
             "is_qualified": status_id == LEAD_STATUS_QUALIFIED,
-            "card_comment": lead.get("COMMENTS") or "",
+            # card_comment обрезаем до 800 симв. — UI показывает превью с
+            # «развернуть», полный текст в карточке Bitrix.
+            "card_comment": (lead.get("COMMENTS") or "")[:800],
             "comments_cached": lead_id in self.state.comments.get("lead", {}),
             "comments_count": len(self.state.comments.get("lead", {}).get(lead_id, [])),
-            "comments": self.state.comments.get("lead", {}).get(lead_id, []),
+            # comments array НЕ возвращаем в массовом ответе — UI грузит
+            # ленту по клику через /api/comments/{kind}/{id}. Это убирает
+            # 1-2 MB прелоадного payload.
         }
 
     def _render_deal(self, deal: Dict[str, Any]) -> Dict[str, Any]:
@@ -577,7 +581,7 @@ class DashboardService:
             "utm_term": deal.get("UTM_TERM") or "",
             "comments_cached": deal_id in self.state.comments.get("deal", {}),
             "comments_count": len(self.state.comments.get("deal", {}).get(deal_id, [])),
-            "comments": self.state.comments.get("deal", {}).get(deal_id, []),
+            # см. _render_lead про lazy-load comments через /api/comments
         }
 
     def _render_comments(self, raw: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
