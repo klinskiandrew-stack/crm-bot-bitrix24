@@ -3,33 +3,44 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Дашборд трафика — Growzone</title>
+<title>Гроу — дашборд трафика</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=Playfair+Display:wght@500;600;700&display=swap" rel="stylesheet">
 <style>
+  /* Палитра Growzone — взята из «Презентация_Гроу_История.html»:
+     dark/green/leaf/bark/gold/cream/paper/ink. */
   :root {
-    --bg: #f5f7fa;
-    --panel: #ffffff;
-    --border: #e3e8ef;
-    --text: #1f2937;
-    --muted: #6b7280;
-    --accent: #4f46e5;
-    --good: #10b981;
-    --warn: #f59e0b;
-    --bad: #ef4444;
-    --chip: #eef2ff;
+    --bg:     #F4F2EC;   /* paper — основной фон */
+    --panel:  #FFFFFF;   /* чистая бумага для карточек */
+    --border: #e3e0d4;   /* приглушённый бежевый */
+    --text:   #2A2A24;   /* ink */
+    --muted:  #6b6457;   /* тёплый серый */
+    --accent: #2E5A2E;   /* green — основной акцент */
+    --leaf:   #6C8F4A;   /* листва — второстепенный акцент */
+    --dark:   #1F3220;   /* dark — шапка, dark surfaces */
+    --bark:   #8C6A3A;   /* кора — тёплый коричневый */
+    --gold:   #CBA66A;   /* золото — премиум-акцент */
+    --cream:  #EAE7DF;   /* крем */
+    --good:   #2E5A2E;
+    --warn:   #CBA66A;
+    --bad:    #9b3a2f;
+    --chip:   #EAE7DF;
   }
   * { box-sizing: border-box; }
   body {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    font-family: 'Manrope', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     margin: 0;
     background: var(--bg);
     color: var(--text);
     font-size: 13px;
   }
   a { color: var(--accent); text-decoration: none; }
-  a:hover { text-decoration: underline; }
+  a:hover { text-decoration: underline; color: var(--leaf); }
   header {
-    background: linear-gradient(135deg, #4f46e5, #7c3aed);
-    color: white;
+    background: linear-gradient(135deg, var(--dark) 0%, #26412a 60%, #2E5A2E 100%);
+    color: var(--cream);
+    border-bottom: 2px solid var(--gold);
     padding: 16px 24px;
     display: flex;
     justify-content: space-between;
@@ -37,8 +48,36 @@
     flex-wrap: wrap;
     gap: 12px;
   }
-  header h1 { margin: 0; font-size: 18px; font-weight: 600; }
-  header .meta { font-size: 12px; opacity: 0.85; }
+  header .brand {
+    display: flex; align-items: center; gap: 16px;
+  }
+  header .brand-logo {
+    height: 76px; width: auto; flex-shrink: 0;
+    border-radius: 8px;
+    background: var(--cream);
+    padding: 4px 8px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.18);
+  }
+  header h1 {
+    margin: 0;
+    font-family: 'Playfair Display', Georgia, serif;
+    font-size: 22px;
+    font-weight: 600;
+    color: var(--cream);
+    letter-spacing: 0.5px;
+    line-height: 1.15;
+  }
+  header h1 .subtitle {
+    display: block;
+    font-family: 'Manrope', sans-serif;
+    font-size: 10px;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.3em;
+    color: var(--gold);
+    margin-top: 4px;
+  }
+  header .meta { font-size: 12px; opacity: 0.85; color: #cdd2c4; }
   .container { max-width: 1600px; margin: 0 auto; padding: 16px; }
   .stats {
     display: grid;
@@ -50,11 +89,24 @@
     background: var(--panel);
     border: 1px solid var(--border);
     border-radius: 8px;
-    padding: 12px 14px;
+    padding: 14px 16px;
+    position: relative;
   }
-  .stat .label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }
-  .stat .value { font-size: 24px; font-weight: 600; margin-top: 2px; color: var(--accent); }
-  .stat .sub { font-size: 11px; color: var(--muted); margin-top: 2px; }
+  .stat::before {
+    content: ""; position: absolute; top: 0; left: 0;
+    width: 36px; height: 2px; background: var(--gold);
+    border-radius: 0 0 4px 0;
+  }
+  .stat .label {
+    color: var(--muted); font-size: 11px;
+    text-transform: uppercase; letter-spacing: 0.7px; font-weight: 600;
+  }
+  .stat .value {
+    font-family: 'Playfair Display', Georgia, serif;
+    font-size: 30px; font-weight: 600; margin-top: 4px;
+    color: var(--dark); line-height: 1.05;
+  }
+  .stat .sub { font-size: 11px; color: var(--muted); margin-top: 4px; font-style: italic; }
 
   /* Воронка конверсий — отдельная секция между плитками и фильтрами */
   .funnel {
@@ -80,7 +132,8 @@
     flex-wrap: wrap;
   }
   .funnel-step {
-    background: linear-gradient(135deg, #eef2ff, #ede9fe);
+    background: linear-gradient(135deg, #F4F2EC, #EAE7DF);
+    border: 1px solid var(--border);
     border-radius: 8px;
     padding: 12px 16px;
     min-width: 130px;
@@ -95,11 +148,12 @@
     font-weight: 500;
   }
   .funnel-step-value {
-    font-size: 26px;
+    font-family: 'Playfair Display', Georgia, serif;
+    font-size: 28px;
     font-weight: 700;
-    color: var(--accent);
+    color: var(--dark);
     margin-top: 2px;
-    line-height: 1.1;
+    line-height: 1.05;
   }
   .funnel-step-sub {
     font-size: 10px;
@@ -108,14 +162,16 @@
     font-style: italic;
   }
   .funnel-step-final {
-    background: linear-gradient(135deg, #d1fae5, #a7f3d0);
+    background: linear-gradient(135deg, #d8e6c8, #b9d29a);
+    border-color: var(--leaf);
   }
-  .funnel-step-final .funnel-step-value { color: #065f46; }
+  .funnel-step-final .funnel-step-value { color: var(--accent); }
   .funnel-step-money {
-    background: linear-gradient(135deg, #fef3c7, #fde68a);
+    background: linear-gradient(135deg, #f5ead0, #e6d4a8);
+    border-color: var(--gold);
     flex: 1.3;
   }
-  .funnel-money { font-size: 20px !important; color: #78350f !important; }
+  .funnel-money { font-size: 20px !important; color: var(--bark) !important; }
   .funnel-arrow {
     display: flex;
     flex-direction: column;
@@ -143,6 +199,97 @@
       background: linear-gradient(180deg, transparent, var(--accent), transparent);
     }
   }
+
+  /* Сворачиваемые карточки воронок (details/summary). */
+  details.funnel-card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    margin-bottom: 12px;
+    padding: 0;
+  }
+  details.funnel-card > summary {
+    padding: 12px 18px;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    list-style: none;
+    user-select: none;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  details.funnel-card > summary::-webkit-details-marker { display: none; }
+  details.funnel-card > summary::before {
+    content: "▾";
+    color: var(--gold);
+    transition: transform 0.15s;
+    display: inline-block;
+    font-size: 14px;
+  }
+  details.funnel-card:not([open]) > summary::before { transform: rotate(-90deg); }
+  details.funnel-card > summary .hint {
+    font-size: 10px;
+    font-weight: 400;
+    color: #9ca3af;
+    text-transform: none;
+    margin-left: auto;
+  }
+  details.funnel-card[open] > .funnel-body,
+  details.funnel-card[open] > .funnel { padding: 0 18px 16px; }
+  details.funnel-card > .funnel { background: transparent; border: none; margin: 0; }
+
+  /* Графическая SVG-воронка. */
+  .funnel-graph { padding: 4px 0 0; }
+  .funnel-graph-labels {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 4px;
+    margin-bottom: 6px;
+    text-align: center;
+  }
+  .funnel-graph-label-name {
+    font-size: 11px; color: var(--muted);
+    text-transform: uppercase; letter-spacing: 0.5px;
+  }
+  .funnel-graph-label-value {
+    font-family: 'Playfair Display', Georgia, serif;
+    font-size: 26px; font-weight: 700; color: var(--dark); margin-top: 2px; line-height: 1.05;
+  }
+  .funnel-graph svg { display: block; width: 100%; height: 180px; }
+  .funnel-graph-cr-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 4px;
+    margin-top: 4px;
+    padding: 0 calc(100% / 8);  /* центрируем подписи между метками */
+    text-align: center;
+  }
+  .funnel-graph-cr-row .cr {
+    font-size: 12px; color: var(--accent); font-weight: 700;
+  }
+  .funnel-graph-overall {
+    text-align: center;
+    margin-top: 14px;
+    padding: 12px 14px;
+    background: linear-gradient(135deg, #f5ead0, #e6d4a8);
+    border: 1px solid var(--gold);
+    border-radius: 6px;
+    font-size: 13px;
+    color: var(--bark);
+    font-weight: 600;
+    font-family: 'Manrope', sans-serif;
+    letter-spacing: 0.3px;
+  }
+  .funnel-graph-overall b {
+    font-size: 19px;
+    font-family: 'Playfair Display', Georgia, serif;
+    color: var(--dark);
+  }
+  .funnel-graph-overall .sum-part { margin-left: 16px; }
 
   .filters {
     background: var(--panel);
@@ -222,13 +369,15 @@
     display: inline-block; padding: 2px 7px; border-radius: 10px;
     font-size: 10px; font-weight: 500; white-space: nowrap;
   }
-  .status.success { background: #d1fae5; color: #065f46; }
-  .status.process { background: #fef3c7; color: #92400e; }
-  .status.failed { background: #fee2e2; color: #991b1b; }
-  .status.neutral { background: #e5e7eb; color: #374151; }
+  .status.success { background: #d8e6c8; color: #2E5A2E; }
+  .status.process { background: #f5ead0; color: #8C6A3A; }
+  .status.failed  { background: #ecd6d0; color: #9b3a2f; }
+  .status.neutral { background: var(--cream); color: var(--muted); }
   .channel-chip {
-    display: inline-block; background: #ede9fe; color: #5b21b6;
-    border-radius: 4px; padding: 1px 6px; font-size: 10px; font-weight: 500;
+    display: inline-block; background: var(--cream); color: var(--dark);
+    border: 1px solid var(--border);
+    border-radius: 4px; padding: 1px 6px; font-size: 10px; font-weight: 600;
+    letter-spacing: 0.3px;
   }
   .toggle-comments {
     background: none; border: 1px dashed var(--border);
@@ -258,11 +407,14 @@
   .empty { text-align: center; color: var(--muted); padding: 28px 16px; }
   .refresh-bar { display: flex; gap: 8px; align-items: center; font-size: 12px; }
   .btn {
-    background: white; color: var(--accent);
-    border: 1px solid white; border-radius: 5px;
-    padding: 6px 12px; cursor: pointer; font-size: 12px; font-weight: 500;
+    background: var(--gold); color: var(--dark);
+    border: 1px solid var(--gold); border-radius: 5px;
+    padding: 6px 14px; cursor: pointer; font-size: 12px; font-weight: 600;
+    letter-spacing: 0.5px;
+    transition: background 0.15s, transform 0.05s;
   }
-  .btn:hover { opacity: 0.9; }
+  .btn:hover { background: #e0bd7e; }
+  .btn:active { transform: scale(0.98); }
   .reason-cell { color: #991b1b; font-size: 11px; max-width: 200px; white-space: normal; }
   .reason-cell .detail { color: var(--muted); font-style: italic; margin-top: 2px; font-size: 10px; }
   .lead-title-cell { min-width: 200px; max-width: 280px; white-space: normal; }
@@ -273,9 +425,14 @@
 </head>
 <body>
 <header>
-  <div>
-    <h1>📊 Дашборд трафика — Growzone CRM</h1>
-    <div class="meta" id="last-refresh">Загрузка…</div>
+  <div class="brand">
+    <img class="brand-logo" src="/static/logo.png" alt="Гроу — автополив участка">
+    <div>
+      <h1>Дашборд трафика
+        <span class="subtitle">Аналитика лидов и продаж</span>
+      </h1>
+      <div class="meta" id="last-refresh">Загрузка…</div>
+    </div>
   </div>
   <div class="refresh-bar">
     <span id="auto-status" style="opacity:.85">Авто: 30 сек</span>
@@ -287,7 +444,15 @@
 
   <div class="stats" id="stats"></div>
 
-  <div id="funnel" class="funnel"></div>
+  <details class="funnel-card" id="card-funnel-graph" open>
+    <summary>📊 Воронка продаж <span class="hint">(клик — свернуть)</span></summary>
+    <div id="funnel-graph" class="funnel-graph"></div>
+  </details>
+
+  <details class="funnel-card" id="card-funnel-detailed" open>
+    <summary>📈 Воронка конверсий — детально <span class="hint">(клик — свернуть)</span></summary>
+    <div id="funnel" class="funnel"></div>
+  </details>
 
   <div class="filters">
     <label>Источник
@@ -520,7 +685,75 @@ function renderStats(filteredLeads, filteredDeals) {
       <div class="sub">Период: ${escapeHtml(periodLabel())}</div>
     </div>
   `;
+  renderGraphFunnel(s);
   renderFunnel(s);
+}
+
+function renderGraphFunnel(s) {
+  const el = document.getElementById('funnel-graph');
+  if (!el) return;
+  const stages = [
+    { label: 'Лиды',       value: s.leads_total       || 0 },
+    { label: 'Квал-лиды',  value: s.qualified_leads   || 0 },
+    { label: 'Замеры',     value: s.measurements_done || 0 },
+    { label: 'Продажи',    value: s.sales_count       || 0 },
+  ];
+
+  // viewBox внутри SVG: 1000x200. Левый край — самая широкая часть (Лиды),
+  // правый — самая узкая (Продажи). Минимальная высота 6 px, чтобы при
+  // нулевом значении полоса всё-таки была видна.
+  const W = 1000, H = 200, MIN_FRAC = 0.03;
+  const maxV = Math.max(stages[0].value, 1);
+  const n = stages.length;
+  const pts = stages.map((st, i) => {
+    const x = (i / (n - 1)) * W;
+    const frac = Math.max(st.value / maxV, MIN_FRAC);
+    const half = (H * frac) / 2;
+    return { x, top: H / 2 - half, bot: H / 2 + half };
+  });
+  // Полигон обходим по часовой: верхняя кромка слева→направо, затем нижняя справа→налево.
+  const polyPts = pts.map(p => `${p.x.toFixed(1)},${p.top.toFixed(1)}`)
+    .concat(pts.slice().reverse().map(p => `${p.x.toFixed(1)},${p.bot.toFixed(1)}`))
+    .join(' ');
+
+  // Конверсии между соседними шагами + общая.
+  const crBetween = stages.slice(0, -1).map((st, i) => fmtPct(stages[i + 1].value, st.value));
+  const crOverall = fmtPct(s.sales_count, s.leads_total);
+
+  const labelsHtml = stages.map(st => `
+    <div>
+      <div class="funnel-graph-label-name">${escapeHtml(st.label)}</div>
+      <div class="funnel-graph-label-value">${st.value}</div>
+    </div>
+  `).join('');
+
+  const sumPart = s.sales_sum
+    ? `<span class="sum-part">Сумма продаж: <b>${fmtMoney(s.sales_sum)}</b></span>`
+    : '';
+
+  el.innerHTML = `
+    <div class="funnel-graph-labels">${labelsHtml}</div>
+    <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">
+      <defs>
+        <linearGradient id="funnelGrad" x1="0" x2="1" y1="0" y2="0">
+          <stop offset="0%"   stop-color="#1F3220"/>
+          <stop offset="35%"  stop-color="#2E5A2E"/>
+          <stop offset="70%"  stop-color="#6C8F4A"/>
+          <stop offset="100%" stop-color="#CBA66A"/>
+        </linearGradient>
+      </defs>
+      <polygon points="${polyPts}" fill="url(#funnelGrad)" opacity="0.95"/>
+    </svg>
+    <div class="funnel-graph-cr-row">
+      <div class="cr">↘ ${crBetween[0]}</div>
+      <div class="cr">↘ ${crBetween[1]}</div>
+      <div class="cr">↘ ${crBetween[2]}</div>
+    </div>
+    <div class="funnel-graph-overall">
+      Конверсия Лид → Продажа: <b>${crOverall}</b>
+      ${sumPart}
+    </div>
+  `;
 }
 
 function renderFunnel(s) {
@@ -535,7 +768,6 @@ function renderFunnel(s) {
   const salesSum = s.sales_sum ? fmtMoney(s.sales_sum) : '—';
 
   el.innerHTML = `
-    <div class="funnel-title">📈 Воронка конверсий (по текущей выборке)</div>
     <div class="funnel-row">
       <div class="funnel-step">
         <div class="funnel-step-label">Лиды</div>
@@ -951,6 +1183,17 @@ document.getElementById('refresh-btn').addEventListener('click', async () => {
 
 bindSorting('leads-head', 'leads');
 bindSorting('deals-head', 'deals');
+
+// Сохраняем состояние свёрнутых/развёрнутых воронок в localStorage,
+// чтобы после reload пользователь видел тот же вид.
+document.querySelectorAll('details.funnel-card').forEach(d => {
+  const saved = localStorage.getItem('dashboard-' + d.id);
+  if (saved === '0') d.open = false;
+  if (saved === '1') d.open = true;
+  d.addEventListener('toggle', () => {
+    localStorage.setItem('dashboard-' + d.id, d.open ? '1' : '0');
+  });
+});
 
 fetchData();
 setInterval(fetchData, REFRESH_MS);

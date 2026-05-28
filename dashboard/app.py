@@ -30,6 +30,7 @@ from dashboard.service import get_service
 logger = structlog.get_logger()
 
 TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
+STATIC_DIR = Path(__file__).resolve().parent / "static"
 DASHBOARD_HTML_PATH = TEMPLATES_DIR / "dashboard.html"
 
 # Опциональный токен — если задан DASHBOARD_TOKEN в .env, требуем
@@ -123,6 +124,10 @@ def build_app() -> web.Application:
     app.router.add_get("/api/vk-leads", api_leads)
     app.router.add_post("/api/vk-refresh", api_refresh)
     app.router.add_get("/api/vk-comments/{kind}/{id}", api_comments)
+
+    # Статика (логотип, иконки)
+    if STATIC_DIR.exists():
+        app.router.add_static("/static/", path=STATIC_DIR, show_index=False)
 
     app.router.add_get("/healthz", healthz)
     return app

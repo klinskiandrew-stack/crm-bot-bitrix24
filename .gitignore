@@ -43,3 +43,6 @@ secrets/
 *.session
 *.session-journal
 .claude/
+
+# Локально сгенерированный preview-снапшот (не для прода)
+dashboard/templates/dashboard_preview.html
