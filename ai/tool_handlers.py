@@ -194,6 +194,41 @@ def _trim_long_fields(card: Dict[str, Any]) -> Dict[str, Any]:
     return card
 
 
+# Поля, которые ВСЕГДА оставляем в lean-режиме (по умолчанию). Содержат
+# всё нужное для подсчётов, сумм, прогнозов: ID, заголовок, стадия,
+# OPPORTUNITY, ответственный, направление, дата, источник без мусорного
+# UTM-хвоста, ссылка на карточку.
+_LEAN_DEAL_FIELDS = {
+    "ID", "TITLE",
+    "STAGE_ID", "STATUS_ID", "STATUS_SEMANTIC_ID",
+    "OPPORTUNITY", "CURRENCY_ID",
+    "DATE_CREATE", "DATE_MODIFY", "CLOSEDATE",
+    "ASSIGNED_BY_ID",
+    "SOURCE_ID", "UTM_SOURCE",  # короткий канал — да, длинные UTM_* — нет
+    # enriched-поля, которые мы дописываем:
+    "manager", "direction", "junk_reason", "card_url",
+}
+_LEAN_LEAD_FIELDS = {
+    "ID", "TITLE", "NAME",
+    "STATUS_ID", "STATUS_SEMANTIC_ID",
+    "OPPORTUNITY", "CURRENCY_ID",
+    "DATE_CREATE", "DATE_MODIFY",
+    "ASSIGNED_BY_ID",
+    "SOURCE_ID", "UTM_SOURCE",
+    "UF_CRM_1696239286",  # направление (raw id для round-trip)
+    "UF_CRM_1723465843",  # причина отказа (raw id, резолвится в проме)
+    "manager", "direction", "card_url",
+}
+
+
+def _to_lean(card: Dict[str, Any], allowed: set) -> Dict[str, Any]:
+    """Drop everything outside the lean field set. ~3-5x context savings on
+    list responses (the LLM has been dragging 20+ UF_* fields per card,
+    most of them empty strings or duplicate UTM data).
+    """
+    return {k: v for k, v in card.items() if k in allowed and v not in (None, "", "0")}
+
+
 class ToolHandlers:
     """Handle tool calls from Claude."""
 
@@ -528,6 +563,7 @@ class ToolHandlers:
         deals = result.get("items", [])
         total = result.get("total", len(deals))
 
+        include_extra = bool(params.get("include_extra_fields"))
         users_map = await client.get_users_map()
         enriched = []
         for d in deals[:50]:
@@ -543,6 +579,8 @@ class ToolHandlers:
             d["junk_reason"] = DEAL_JUNK_REASONS.get(junk_reason_id, "") if junk_reason_id else ""
             d["manager"] = _resolve_manager(d.get("ASSIGNED_BY_ID"), users_map)
             _trim_long_fields(d)
+            if not include_extra:
+                d = _to_lean(d, _LEAN_DEAL_FIELDS)
             enriched.append(d)
 
         out = {
@@ -613,6 +651,7 @@ class ToolHandlers:
         leads = result.get("items", [])
         total = result.get("total", len(leads))
 
+        include_extra = bool(params.get("include_extra_fields"))
         users_map = await client.get_users_map()
         enriched = []
         for l in leads[:50]:
@@ -623,6 +662,8 @@ class ToolHandlers:
             )
             l["manager"] = _resolve_manager(l.get("ASSIGNED_BY_ID"), users_map)
             _trim_long_fields(l)
+            if not include_extra:
+                l = _to_lean(l, _LEAN_LEAD_FIELDS)
             enriched.append(l)
 
         out = {

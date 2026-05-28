@@ -119,7 +119,13 @@ class Settings(BaseSettings):
 
     # Circuit breakers — Level 1 (per-request)
     max_iterations: int = 5
-    max_request_input_tokens: int = 150_000  # cumulative across iterations
+    max_request_input_tokens: int = 250_000  # cumulative across iterations
+    # 2026-05-28: поднято со 150K до 250K. На прогнозных вопросах (пр.
+    # «на какую сумму до конца мая может продать отдел?») 5 итераций
+    # get_deals накапливают 200-220K из-за повторной отправки tool_results.
+    # Cache hit на промпте/tools покрывает ~28K фактически бесплатно
+    # (0.0028 vs 0.14 / 1M токенов, ~50× дешевле), так что финансово
+    # лимит безболезненно растёт. Реальная защита — max_request_credits.
     max_request_credits: float = 30.0        # cumulative across iterations
     max_tool_calls_per_request: int = 12     # total tool invocations per request
     # Поднято с 8 → 12 после анализа отладки 2026-05: аналитические вопросы
