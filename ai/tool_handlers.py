@@ -288,6 +288,36 @@ class ToolHandlers:
             logger.error("Tool handler error", tool=tool_name, error=str(e))
             return {"error": str(e)}
 
+    async def growth_opportunities(self, params: Dict[str, Any], user_context: Dict[str, Any]) -> Dict[str, Any]:
+        """Композитный отчёт «где растут деньги, где теряются»."""
+        from growth_intel.digest import build_growth_digest
+
+        client = await self._get_client()
+        try:
+            period_days = int(params.get("period_days") or 30)
+        except (TypeError, ValueError):
+            period_days = 30
+        period_days = max(7, min(period_days, 90))
+        skip_refresh = bool(params.get("skip_refresh"))
+
+        result = await build_growth_digest(
+            client=client,
+            period_days=period_days,
+            skip_refresh=skip_refresh,
+            refresh_limit=60,
+        )
+        return {
+            "digest_text": result["text"],
+            "total_at_risk_rub": result.get("total_at_risk_rub", 0),
+            "signals_count": result.get("signals_count", 0),
+            "won_revenue": result.get("won_revenue", 0),
+            "note_to_llm": (
+                "Выше — уже готовый HTML-отчёт. Отдай пользователю как "
+                "есть, без перефразирования. Можно добавить одну "
+                "вступительную фразу, не больше."
+            ),
+        }
+
     async def deals_status_digest(self, params: Dict[str, Any], user_context: Dict[str, Any]) -> Dict[str, Any]:
         """Готовая HTML-сводка по живым сделкам из локальной sales_comms БД.
 

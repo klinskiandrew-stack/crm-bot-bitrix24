@@ -104,6 +104,14 @@ class Settings(BaseSettings):
     sales_comms_enabled: bool = True
     sales_comms_sync_minute: int = 17       # запуск каждый час на :17 (не лезет в другие cron'ы)
 
+    # growth_intel — еженедельный отчёт «где теряем деньги» с триггерами
+    # из переписки. Тяжёлый (DeepSeek по 60 сделкам, ~5-10 мин), поэтому
+    # только раз в неделю + on-demand по запросу из бота.
+    growth_intel_enabled: bool = True
+    growth_intel_weekday: str = "mon"
+    growth_intel_hour: int = 9
+    growth_intel_minute: int = 15
+
     stuck_deal_days: int = 14               # open deal not moved this long
     stuck_deal_max_days: int = 90           # older than this = dead, skip
     cold_lead_days: int = 2                 # active lead untouched this long

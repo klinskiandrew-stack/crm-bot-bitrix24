@@ -213,6 +213,34 @@ async def _run_sales_comms_transcribe() -> None:
         logger.error("sales_comms_transcribe job failed", error=str(e))
 
 
+async def _run_growth_intel_digest(bot: Bot) -> None:
+    """Weekly: построить growth_intel дайджест и послать в чат РОПа.
+
+    Долгая задача: refresh_signals прогоняет analyze_deal по всем
+    активным сделкам (~60), каждая = DeepSeek-вызов ~3-5 сек. Итого
+    5-10 минут. Поэтому только раз в неделю.
+    """
+    try:
+        from growth_intel.digest import build_growth_digest
+        from aiogram.enums import ParseMode
+        chat_id = settings.sales_digest_chat_id or settings.manager_daily_chat_id
+        if not chat_id:
+            logger.info("growth_intel digest skipped — no РОП chat configured")
+            return
+        result = await build_growth_digest(period_days=30, skip_refresh=False)
+        text = result["text"]
+        for i in range(0, len(text), 4000):
+            await bot.send_message(chat_id, text[i:i+4000], parse_mode=ParseMode.HTML)
+        logger.info(
+            "growth_intel digest sent",
+            chat_id=chat_id,
+            at_risk=result.get("total_at_risk_rub"),
+            signals=result.get("signals_count"),
+        )
+    except Exception as e:
+        logger.error("growth_intel digest job failed", error=str(e))
+
+
 def start_report_scheduler(bot: Bot) -> Optional[AsyncIOScheduler]:
     """Build and start the scheduler. Returns the instance (or None if disabled)."""
     if not settings.reports_enabled or not settings.reports_chat_id:
@@ -306,6 +334,23 @@ def start_report_scheduler(bot: Bot) -> Optional[AsyncIOScheduler]:
             CronTrigger(minute="*/5", timezone=tz),
             id="sales_comms_transcribe",
             misfire_grace_time=240,
+        )
+
+    # Weekly growth_intel digest — «где растут деньги, где теряются».
+    # По понедельникам в 09:15 МСК (через 15 мин после manager_daily,
+    # чтобы не пересекаться с DeepSeek).
+    if settings.growth_intel_enabled and (settings.sales_digest_chat_id or settings.manager_daily_chat_id):
+        scheduler.add_job(
+            _run_growth_intel_digest,
+            CronTrigger(
+                day_of_week=settings.growth_intel_weekday,
+                hour=settings.growth_intel_hour,
+                minute=settings.growth_intel_minute,
+                timezone=tz,
+            ),
+            args=[bot],
+            id="growth_intel_digest",
+            misfire_grace_time=3600,
         )
 
     # Weekly "sales opportunities" digest → РОП chat: stuck deals,

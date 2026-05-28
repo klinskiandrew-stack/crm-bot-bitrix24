@@ -233,3 +233,42 @@ CREATE TABLE IF NOT EXISTS deal_sync_state (
     sync_error           TEXT                  -- последняя ошибка sync для отладки
 );
 CREATE INDEX IF NOT EXISTS idx_dss_synced ON deal_sync_state(last_synced_at);
+
+-- =========================================================================
+-- growth_intel module: семантические сигналы из коммуникаций по сделкам.
+--
+-- Анализатор пробегает по deal_communications за период, скармливает
+-- DeepSeek'у переписку и расшифровки звонков, и извлекает структурированные
+-- "триггеры" — сигналы где менеджер может (или должен) что-то сделать,
+-- чтобы не потерять клиента.
+--
+-- Категории (см. growth_intel/triggers.py:TRIGGER_CATEGORIES):
+--   client_ready_to_pay        — клиент готов оплатить
+--   client_promised_deadline   — клиент назвал дату обещания
+--   manager_promised_action    — менеджер обещал клиенту срок
+--   client_question_unanswered — клиент задал вопрос без ответа
+--   objection_not_handled      — клиент возразил, не отработано
+--   decision_signal            — клиент дал решение к покупке
+--
+-- satisfied — флаг что менеджер реально среагировал на сигнал (по умолчанию
+-- false; меняем когда видим в коммуникациях ответное действие).
+-- =========================================================================
+CREATE TABLE IF NOT EXISTS growth_signals (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    deal_id        INTEGER NOT NULL,
+    category       TEXT NOT NULL,         -- см. TRIGGER_CATEGORIES
+    detected_at    TIMESTAMP NOT NULL,    -- когда событие в коммуникациях случилось
+    deadline       TIMESTAMP,             -- срок до которого ждём действия (если был)
+    evidence       TEXT NOT NULL,         -- цитата/пересказ из коммуникации
+    value_at_risk  REAL,                  -- сумма сделки на момент детекта (₽)
+    manager_id     INTEGER,               -- кто ответственный
+    satisfied      INTEGER DEFAULT 0,     -- 1 если менеджер уже отработал
+    satisfied_at   TIMESTAMP,
+    satisfied_note TEXT,
+    severity       TEXT DEFAULT 'medium', -- 'low' | 'medium' | 'high' (для приоритизации)
+    created_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(deal_id, category, detected_at)
+);
+CREATE INDEX IF NOT EXISTS idx_gs_unsatisfied ON growth_signals(satisfied, severity, deadline);
+CREATE INDEX IF NOT EXISTS idx_gs_deal        ON growth_signals(deal_id, detected_at DESC);
+CREATE INDEX IF NOT EXISTS idx_gs_manager     ON growth_signals(manager_id, satisfied, detected_at DESC);
