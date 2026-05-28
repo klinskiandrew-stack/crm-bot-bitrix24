@@ -373,36 +373,31 @@ async def sync_deal(
 # ---------- bulk-варианты для backfill / cron ------------------------------
 
 async def iter_active_deals(client: Bitrix24Client, max_items: int = 500) -> List[Dict[str, Any]]:
-    """Активные сделки = все, кроме закрытых выигранных/проигранных/junk.
-    Bitrix24 STATUS_SEMANTIC_ID: P=in process, S=success, F=failure.
-    Берём только P. Возвращает список с минимальным набором полей.
+    """Активные сделки = filter[CLOSED]=N на стороне Bitrix.
+
+    CLOSED — нативное поле сделки, выставляется в Y когда стадия = WON
+    или LOSE (любой воронки). Это надёжнее, чем гадать про STAGE_ID
+    суффиксы (которые в дефолтной воронке без префикса :, например
+    просто 'WON', а в кастомных C2:WON).
     """
-    resp = await client.get_deals(
-        assigned_by_ids=None,           # все ответственные — backfill
-        filter_by_stage=None,
-        limit=max_items,
-        return_total=True,
+    items, _total = await client._paginate(
+        "crm.deal.list",
+        params={
+            "filter": {"CLOSED": "N"},
+            "select": [
+                "ID", "TITLE", "STAGE_ID", "STAGE_SEMANTIC_ID",
+                "ASSIGNED_BY_ID", "OPPORTUNITY", "DATE_CREATE", "DATE_MODIFY",
+                "CATEGORY_ID",
+            ],
+            "order": {"DATE_MODIFY": "DESC"},
+        },
+        max_items=max_items,
     )
-    if isinstance(resp, dict) and "items" in resp:
-        deals = resp["items"]
-    else:
-        deals = resp if isinstance(resp, list) else []
-    active = []
-    for d in deals or []:
-        sem = (d.get("STATUS_SEMANTIC_ID") or d.get("status_semantic_id") or "").upper()
-        # У сделок поле семантики называется STAGE_SEMANTIC_ID в новых API,
-        # но crm.deal.list даёт STAGE_ID. Используем альтернативную проверку
-        # по STAGE_ID: stage у Growzone WON/LOSE заканчиваются на :WON/:LOSE.
-        stage = (d.get("STAGE_ID") or "").upper()
-        is_won = stage.endswith(":WON")
-        is_lost = stage.endswith(":LOSE") or stage.endswith(":LOST")
-        is_junk = stage.endswith(":JUNK") or stage.endswith(":APOLOGY")
-        if is_won or is_lost or is_junk:
-            continue
-        if sem in _INACTIVE_SEMANTICS:
-            continue
-        active.append(d)
-    return active
+    if isinstance(items, dict) and items.get("error"):
+        logger.error("iter_active_deals fetch failed", error=items.get("error"))
+        return []
+    # Доп. защита: иногда CLOSED=N но STAGE_SEMANTIC_ID=F (исторический хвост).
+    return [d for d in items or [] if (d.get("STAGE_SEMANTIC_ID") or "P").upper() not in _INACTIVE_SEMANTICS]
 
 
 async def sync_deals_bulk(
