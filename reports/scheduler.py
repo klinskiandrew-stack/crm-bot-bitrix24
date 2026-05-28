@@ -203,10 +203,12 @@ async def _run_sales_comms_sync() -> None:
 
 
 async def _run_sales_comms_transcribe() -> None:
-    """Every 5 min: жуёт до 3 pending-звонков из deal_communications."""
+    """Every 2 min: жуёт до 8 pending-звонков из deal_communications.
+    Реальная скорость на нашем CPU ~30с/звонок, 8 файлов = ~4 мин,
+    плотно укладываемся в окно с misfire_grace=120."""
     try:
         from sales_comms.transcribe import run_batch
-        result = await run_batch(limit=3)
+        result = await run_batch(limit=8)
         if result.get("processed"):
             logger.info("sales_comms_transcribe done", **result)
     except Exception as e:
@@ -336,14 +338,17 @@ def start_report_scheduler(bot: Bot) -> Optional[AsyncIOScheduler]:
             id="sales_comms_sync",
             misfire_grace_time=1800,
         )
-        # Whisper для звонков — каждые 5 минут по 3 файла. Жёстко
-        # лимитировано через async lock в lead_reports/stt.py, чтобы
-        # не съесть RAM/CPU.
+        # Whisper для звонков — каждые 2 минуты, до 8 файлов за раз.
+        # Прежняя настройка (3 файла / 5 мин) недозагружала CPU: средний
+        # звонок жуётся ~30 сек, итого 1.5 мин работы из 5-мин окна.
+        # Сейчас 8 × 30с = ~4 мин, плотно укладываемся в 2-мин окно с
+        # учётом перекрытия в misfire_grace. RAM держится одна модель
+        # (singleton stt._model), OOM-риска нет.
         scheduler.add_job(
             _run_sales_comms_transcribe,
-            CronTrigger(minute="*/5", timezone=tz),
+            CronTrigger(minute="*/2", timezone=tz),
             id="sales_comms_transcribe",
-            misfire_grace_time=240,
+            misfire_grace_time=120,
         )
         # Часовая сводка прогресса в личку админа (sales_comms + growth_intel).
         # На :45, чтобы данные после sync (:17) и нескольких Whisper-проходов
