@@ -114,6 +114,10 @@ class CacheState:
     # ушла дальше или была провалена.
     measurement_done_deal_ids: set = field(default_factory=set)
     contract_signed_deal_ids: set = field(default_factory=set)
+    # Дата FIRST перехода в стадию: {deal_id: ISO datetime string}.
+    # Используется для sales-period фильтрации воронки и time-to-sale.
+    measurement_done_dates: Dict[int, str] = field(default_factory=dict)
+    contract_signed_dates: Dict[int, str] = field(default_factory=dict)
     last_refresh: Optional[datetime] = None
     last_error: Optional[str] = None
 
@@ -405,41 +409,78 @@ class DashboardService:
                 self.state.users[int(uid)] = full or f"User #{uid}"
 
     async def _refresh_stage_history(self, b24: Bitrix24Client) -> None:
-        """Грузит ID сделок, проходивших через 'Замер выполнен' и 'Договор'.
+        """Грузит ID сделок + дату FIRST перехода через 'Замер выполнен' и 'Договор'.
 
         Используем crm.stagehistory.list с фильтром по STAGE_ID и периодом
         = `lookback_days`. Это даёт исторические факты — если сделка хоть
         раз была на этой стадии, она засчитывается даже если уехала
         дальше (в Монтаж) или была провалена.
+
+        В отличие от b24.get_stage_history, который обрезает events до 50,
+        здесь обходим напрямую через _call, чтобы сохранить CREATED_TIME
+        для КАЖДОЙ сделки — это нужно для sales-period фильтрации.
         """
         date_from = (datetime.now(_MSK).date() - timedelta(days=self.lookback_days)).strftime("%Y-%m-%d")
         # date_to: завтра, чтобы поймать сегодняшние переходы.
-        date_to = (datetime.now(_MSK).date() + timedelta(days=1)).strftime("%Y-%m-%d")
+        next_day = (datetime.now(_MSK).date() + timedelta(days=2)).strftime("%Y-%m-%d")
 
-        async def _stage_ids(stage_id: str) -> set:
-            res = await b24.get_stage_history(
-                stage_id=stage_id,
-                date_from=date_from,
-                date_to=date_to,
-                category_id=DEAL_CATEGORY,
-                entity_type_id=2,  # deal
-            )
-            if isinstance(res, dict) and "error" in res:
-                logger.warning("stagehistory error", stage=stage_id, error=res["error"])
-                return set()
-            ids = (res or {}).get("unique_deal_ids") or []
-            return set(int(x) for x in ids)
+        async def _stage_first_dates(stage_id: str) -> Dict[int, str]:
+            """Возвращает {deal_id: ISO timestamp first entry} для всех сделок,
+            которые когда-либо переходили в `stage_id` за период lookback."""
+            all_events: List[Dict[str, Any]] = []
+            start = 0
+            params = {
+                "entityTypeId": 2,
+                "filter": {
+                    "=STAGE_ID": stage_id,
+                    "=CATEGORY_ID": DEAL_CATEGORY,
+                    ">=CREATED_TIME": f"{date_from}T00:00:00+03:00",
+                    "<CREATED_TIME": f"{next_day}T00:00:00+03:00",
+                },
+                "select": ["OWNER_ID", "CREATED_TIME"],
+                "order": {"CREATED_TIME": "ASC"},
+            }
+            SAFETY_CAP = 20_000
+            while True:
+                resp = await b24._call("crm.stagehistory.list", params, start=start)
+                if isinstance(resp, dict) and "error" in resp:
+                    logger.warning("stagehistory error", stage=stage_id, error=resp["error"])
+                    break
+                items = (resp.get("result") or {}).get("items") or []
+                if not items:
+                    break
+                all_events.extend(items)
+                next_start = resp.get("next")
+                if next_start is None or len(items) < 50:
+                    break
+                start = next_start
+                if len(all_events) >= SAFETY_CAP:
+                    logger.warning("stagehistory safety cap hit", stage=stage_id, cap=SAFETY_CAP)
+                    break
 
-        measurement_ids, contract_ids = await asyncio.gather(
-            _stage_ids(STAGE_MEASUREMENT_DONE),
-            _stage_ids(STAGE_CONTRACT_SIGNED),
+            # Order ASC → первый встреченный OWNER_ID = самый ранний переход.
+            first_dates: Dict[int, str] = {}
+            for ev in all_events:
+                try:
+                    oid = int(ev.get("OWNER_ID") or 0)
+                except (TypeError, ValueError):
+                    continue
+                if oid and oid not in first_dates:
+                    first_dates[oid] = ev.get("CREATED_TIME") or ""
+            return first_dates
+
+        measurement_dates, contract_dates = await asyncio.gather(
+            _stage_first_dates(STAGE_MEASUREMENT_DONE),
+            _stage_first_dates(STAGE_CONTRACT_SIGNED),
         )
-        self.state.measurement_done_deal_ids = measurement_ids
-        self.state.contract_signed_deal_ids = contract_ids
+        self.state.measurement_done_dates = measurement_dates
+        self.state.contract_signed_dates = contract_dates
+        self.state.measurement_done_deal_ids = set(measurement_dates.keys())
+        self.state.contract_signed_deal_ids = set(contract_dates.keys())
         logger.info(
             "Stagehistory loaded",
-            measurement_done=len(measurement_ids),
-            contract_signed=len(contract_ids),
+            measurement_done=len(measurement_dates),
+            contract_signed=len(contract_dates),
         )
 
     # ---------- Rendering ----------
@@ -513,6 +554,10 @@ class DashboardService:
             # по crm.stagehistory.list). Используется для воронки CR.
             "passed_measurement": deal_id in self.state.measurement_done_deal_ids,
             "passed_contract": deal_id in self.state.contract_signed_deal_ids,
+            # ISO timestamp ПЕРВОГО перехода в стадию (если был).
+            # Нужно для sales-period фильтрации и time-to-sale.
+            "measurement_done_at": self.state.measurement_done_dates.get(deal_id, ""),
+            "contract_signed_at": self.state.contract_signed_dates.get(deal_id, ""),
             "opportunity": float(deal.get("OPPORTUNITY") or 0),
             "currency": deal.get("CURRENCY_ID") or "RUB",
             "manager": self.state.users.get(manager_id, "") if manager_id else "",
