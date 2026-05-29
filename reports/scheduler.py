@@ -225,6 +225,17 @@ async def _run_sales_comms_progress_notify(bot: Bot) -> None:
         logger.error("sales_comms progress notify failed", error=str(e))
 
 
+async def _run_sheets_watcher(bot: Bot) -> None:
+    """Every N min: проверить настроенные Google Sheets на новые строки.
+    Молчит при пустой конфигурации. Безопасно если SA нет доступа —
+    логирует error и продолжает."""
+    try:
+        from sheets_watcher.watcher import check_all_watched
+        await check_all_watched(bot)
+    except Exception as e:
+        logger.error("sheets_watcher job failed", error=str(e))
+
+
 async def _run_growth_intel_digest(bot: Bot) -> None:
     """Weekly: построить growth_intel дайджест и послать в чат РОПа.
 
@@ -362,6 +373,19 @@ def start_report_scheduler(bot: Bot) -> Optional[AsyncIOScheduler]:
             args=[bot],
             id="sales_comms_progress_notify",
             misfire_grace_time=3600,
+        )
+
+    # sheets_watcher — мониторинг Google Sheets каждые N минут.
+    if settings.sheets_watcher_enabled and settings.sheet_watcher_targets:
+        scheduler.add_job(
+            _run_sheets_watcher,
+            CronTrigger(
+                minute=f"*/{max(1, settings.sheet_watcher_interval_min)}",
+                timezone=tz,
+            ),
+            args=[bot],
+            id="sheets_watcher",
+            misfire_grace_time=240,
         )
 
     # ⚠️ Прежний еженедельный growth_intel_digest (понедельник 09:15)

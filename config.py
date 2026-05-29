@@ -109,6 +109,13 @@ class Settings(BaseSettings):
     # уже расшифрованных звонках (см. transcription_status='done').
     sales_comms_transcribe_enabled: bool = True
 
+    # sheets_watcher — мониторинг Google Sheets на новые строки.
+    # Конфиг JSON-списком в .env: SHEET_WATCHER_TARGETS='[{"id":"...", "label":"Авито"}]'
+    # При появлении новых строк в любой из таблиц шлёт админу уведомление.
+    sheets_watcher_enabled: bool = True
+    sheet_watcher_targets: str = ""        # JSON; пустая строка = выключено
+    sheet_watcher_interval_min: int = 5    # как часто проверять, минут
+
     # growth_intel — отчёт «где теряем деньги» с триггерами из переписки.
     # Тяжёлый (DeepSeek по 60-100 сделкам, ~5-10 мин). Сейчас встроен в
     # ежедневный manager_daily-отчёт как второе сообщение — см.
