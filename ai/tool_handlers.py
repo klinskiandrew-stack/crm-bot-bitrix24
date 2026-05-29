@@ -361,6 +361,203 @@ class ToolHandlers:
             ),
         }
 
+    async def sales_forecast(self, params: Dict[str, Any], user_context: Dict[str, Any]) -> Dict[str, Any]:
+        """Прогноз выручки до конца месяца за один вызов.
+
+        Берёт все сделки с CLOSEDATE (или DATE_MODIFY) в указанном месяце +
+        все живые сделки (CLOSED=N). Группирует по стадиям, применяет
+        вероятности к OPPORTUNITY, возвращает агрегаты.
+        """
+        from datetime import datetime as _dt
+        from collections import Counter, defaultdict
+
+        # ------- parse месяц ------------------------------------------
+        month_str = params.get("month") or _dt.now().strftime("%Y-%m")
+        try:
+            month_dt = _dt.strptime(month_str + "-01", "%Y-%m-%d")
+        except ValueError:
+            return {"error": f"month='{month_str}' не в формате YYYY-MM"}
+        # последний день месяца
+        if month_dt.month == 12:
+            next_month = month_dt.replace(year=month_dt.year + 1, month=1)
+        else:
+            next_month = month_dt.replace(month=month_dt.month + 1)
+        month_from = month_dt.strftime("%Y-%m-%d")
+        month_to_exclusive = next_month.strftime("%Y-%m-%d")
+
+        # ------- разбор стадии в bucket -------------------------------
+        # семантически как в growth_intel/funnel.py
+        def _bucket(stage_id: str) -> str:
+            s = (stage_id or "").upper()
+            if "WON" in s:
+                return "won"
+            if any(x in s for x in ("LOSE", "LOST", "JUNK", "APOLOGY")):
+                return "lost"
+            if any(x in s for x in ("СЧЁТ", "СЧЕТ", "INVOICE", "UC_INVOICE")):
+                return "invoice"
+            if any(x in s for x in ("КП", "PROPOSAL", "OFFER", "UC_OFFER")):
+                return "proposal"
+            if any(x in s for x in ("ЗАМЕР", "MEASUREMENT", "UC_PEXP")):
+                return "measurement"
+            return "created"
+
+        # вероятности выигрыша по бакету — настраиваются под Growzone
+        # на основе исторической конверсии. Сейчас базовые цифры
+        # отрасли (благоустройство/услуги). LLM может в ответе
+        # упомянуть что это базовые вероятности.
+        WIN_PROB = {
+            "created": 0.05,
+            "measurement": 0.20,
+            "proposal": 0.40,
+            "invoice": 0.70,
+            "won": 1.00,
+            "lost": 0.00,
+        }
+        STAGE_RU = {
+            "created": "В работе (первый контакт)",
+            "measurement": "Замер назначен/проведён",
+            "proposal": "КП отправлено",
+            "invoice": "Счёт выставлен",
+            "won": "Выиграно",
+            "lost": "Проиграно",
+        }
+
+        client = await self._get_client()
+
+        # фильтр по менеджеру (если указан)
+        manager_ids, mgr_err = await self._resolve_manager_filter(params)
+        if mgr_err:
+            return mgr_err
+
+        # ------- запрос 1: WON-сделки за месяц ------------------------
+        won_filter: Dict[str, Any] = {
+            "STAGE_SEMANTIC_ID": "S",  # success
+            ">=CLOSEDATE": month_from,
+            "<CLOSEDATE": month_to_exclusive,
+        }
+        if manager_ids:
+            won_filter["ASSIGNED_BY_ID"] = manager_ids
+        won_items, _ = await client._paginate(
+            "crm.deal.list",
+            params={
+                "filter": won_filter,
+                "select": ["ID", "OPPORTUNITY", "ASSIGNED_BY_ID", "STAGE_ID"],
+            },
+            max_items=500,
+        )
+        won_items = won_items if isinstance(won_items, list) else []
+
+        # ------- запрос 2: активные сделки ----------------------------
+        live_filter: Dict[str, Any] = {"CLOSED": "N"}
+        if manager_ids:
+            live_filter["ASSIGNED_BY_ID"] = manager_ids
+        live_items, _ = await client._paginate(
+            "crm.deal.list",
+            params={
+                "filter": live_filter,
+                "select": [
+                    "ID", "OPPORTUNITY", "ASSIGNED_BY_ID",
+                    "STAGE_ID", "STAGE_SEMANTIC_ID",
+                ],
+            },
+            max_items=500,
+        )
+        live_items = live_items if isinstance(live_items, list) else []
+
+        users_map = await client.get_users_map()
+
+        # ------- агрегация -------------------------------------------
+        won_sum = 0.0
+        won_count = 0
+        for d in won_items:
+            try:
+                won_sum += float(d.get("OPPORTUNITY") or 0)
+            except (TypeError, ValueError):
+                pass
+            won_count += 1
+
+        by_bucket_sum = defaultdict(float)
+        by_bucket_count = Counter()
+        by_bucket_weighted = defaultdict(float)
+        by_manager: Dict[str, Dict[str, float]] = defaultdict(
+            lambda: {"won_sum": 0.0, "won_count": 0, "live_sum": 0.0,
+                     "live_count": 0, "weighted_forecast": 0.0}
+        )
+
+        for d in won_items:
+            mid = d.get("ASSIGNED_BY_ID")
+            mname = _resolve_manager(mid, users_map) or "?"
+            try:
+                opp = float(d.get("OPPORTUNITY") or 0)
+            except (TypeError, ValueError):
+                opp = 0.0
+            by_manager[mname]["won_sum"] += opp
+            by_manager[mname]["won_count"] += 1
+
+        for d in live_items:
+            bkt = _bucket(d.get("STAGE_ID"))
+            try:
+                opp = float(d.get("OPPORTUNITY") or 0)
+            except (TypeError, ValueError):
+                opp = 0.0
+            mid = d.get("ASSIGNED_BY_ID")
+            mname = _resolve_manager(mid, users_map) or "?"
+            by_bucket_sum[bkt] += opp
+            by_bucket_count[bkt] += 1
+            weighted = opp * WIN_PROB.get(bkt, 0.05)
+            by_bucket_weighted[bkt] += weighted
+            by_manager[mname]["live_sum"] += opp
+            by_manager[mname]["live_count"] += 1
+            by_manager[mname]["weighted_forecast"] += weighted
+
+        weighted_forecast = sum(by_bucket_weighted.values())
+        # оптимистический = WON + сумма всех живых
+        optimistic = won_sum + sum(by_bucket_sum.values())
+        # пессимистический = только WON + invoice × 70%
+        pessimistic = won_sum + by_bucket_weighted.get("invoice", 0.0)
+
+        # формат для LLM — компактный
+        return {
+            "month": month_str,
+            "won_so_far": {
+                "sum_rub": round(won_sum, 0),
+                "deals": won_count,
+            },
+            "live_pipeline_by_stage": [
+                {
+                    "stage": STAGE_RU[b],
+                    "bucket": b,
+                    "count": by_bucket_count.get(b, 0),
+                    "sum_rub": round(by_bucket_sum.get(b, 0.0), 0),
+                    "win_probability": WIN_PROB.get(b, 0),
+                    "weighted_forecast_rub": round(by_bucket_weighted.get(b, 0.0), 0),
+                }
+                for b in ("invoice", "proposal", "measurement", "created")
+                if by_bucket_count.get(b, 0) > 0
+            ],
+            "forecast_total_rub": {
+                "weighted": round(won_sum + weighted_forecast, 0),
+                "optimistic_max": round(optimistic, 0),
+                "pessimistic_min": round(pessimistic, 0),
+                "note": (
+                    "weighted = won_so_far + sum(live × probability_by_stage). "
+                    "Вероятности базовые отраслевые (5/20/40/70%), для точного "
+                    "прогноза по конверсии Growzone надо собрать историческую "
+                    "статистику по стадиям."
+                ),
+            },
+            "by_manager": {
+                name: {
+                    "won_so_far_rub": round(stats["won_sum"], 0),
+                    "won_deals": stats["won_count"],
+                    "live_pipeline_rub": round(stats["live_sum"], 0),
+                    "live_deals": stats["live_count"],
+                    "weighted_forecast_rub": round(stats["weighted_forecast"], 0),
+                }
+                for name, stats in by_manager.items()
+            },
+        }
+
     async def manager_call_stats(self, params: Dict[str, Any], user_context: Dict[str, Any]) -> Dict[str, Any]:
         """Real phone-talk time per sales manager via voximplant.statistic.get."""
         err = _validate_params(params, date_keys=("date_from", "date_to"), stage_key="not_used")
