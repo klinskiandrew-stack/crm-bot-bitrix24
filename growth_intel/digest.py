@@ -39,9 +39,11 @@ async def _deals_with_recent_activity(since_hours: int) -> set:
         SELECT DISTINCT deal_id
         FROM deal_communications
         WHERE occurred_at >= datetime('now', '-{int(since_hours)} hours')
+          AND deal_id IS NOT NULL
         """,
     )
-    return {int(r["deal_id"]) for r in rows or [] if r.get("deal_id")}
+    # sqlite3.Row не поддерживает .get() — обращаемся через индексацию.
+    return {int(r["deal_id"]) for r in rows or []}
 
 
 async def refresh_signals(
