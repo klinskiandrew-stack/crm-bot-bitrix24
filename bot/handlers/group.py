@@ -64,11 +64,22 @@ _TOOL_LABELS = {
     "get_deals": "📊 Получаю сделки...",
     "get_deal_details": "🔍 Изучаю детали сделки...",
     "get_leads": "📋 Получаю лиды...",
+    "leads_summary": "📊 Считаю агрегаты по лидам...",
+    "deals_summary": "📊 Считаю агрегаты по сделкам...",
     "search_contacts_or_companies": "👤 Ищу контакты...",
     "get_pipeline_summary": "📈 Считаю воронку...",
-    "get_user_activity_summary": "📅 Собираю активность...",
+    "get_user_activity_summary": "📅 Собираю активность менеджеров...",
     "get_recent_activities": "📅 Получаю последние действия...",
     "count_deals_passed_stage": "📊 Считаю по истории стадий...",
+    "analyze_junk_leads": "🚮 Анализирую причины отказов (лиды)...",
+    "analyze_junk_deals": "🚮 Анализирую причины отказов (сделки)...",
+    "manager_call_stats": "📞 Считаю минуты разговоров...",
+    "analyze_lead_calls": "🎧 Разбираю записи звонков...",
+    "sales_opportunities": "💎 Ищу зависшие сделки и забытые лиды...",
+    "sales_forecast": "📈 Считаю прогноз продаж до конца месяца...",
+    "deals_status_digest": "📋 Собираю сводку по живым сделкам...",
+    "growth_opportunities": "💰 Запускаю анализ «где теряем деньги»...",
+    "export_leads_to_excel": "📤 Формирую Excel-выгрузку...",
 }
 
 
@@ -400,6 +411,11 @@ async def process_question(
             **user_context,
             "_bot": message.bot,
             "_chat_id": chat_id,
+            # Long-running tools (growth_opportunities, deals_status_digest)
+            # читают _progress и сами апдейтят placeholder между внутренними
+            # шагами — иначе пользователь видит «Выполняю growth_opportunities…»
+            # минуты и не понимает живой ли бот.
+            "_progress": _progress,
         }
 
         response = await orchestrator.process_message(

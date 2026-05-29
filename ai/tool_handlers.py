@@ -309,13 +309,28 @@ class ToolHandlers:
         else:
             skip_refresh = bool(skip_refresh)
 
+        # Progress callback из bot/handlers/group.py — обновляет
+        # placeholder в Telegram между внутренними шагами, чтобы юзер
+        # видел что бот не завис. _progress принимает (stage, detail).
+        # Передаём произвольный текст через stage='tool' + detail.
+        _bot_progress = user_context.get("_progress")
+
+        async def _step(text: str) -> None:
+            if _bot_progress:
+                try:
+                    await _bot_progress("tool", text)
+                except Exception:
+                    pass
+
+        await _step("💎 Загружаю горящие сигналы из базы…")
+
         result = await build_growth_digest(
             client=client,
             period_days=period_days,
             skip_refresh=skip_refresh,
             refresh_limit=60,
-            # Если уж refresh-режим — то инкремент за 24ч, не полный
             refresh_since_hours=24,
+            progress_cb=_step,
         )
         return {
             "digest_text": result["text"],

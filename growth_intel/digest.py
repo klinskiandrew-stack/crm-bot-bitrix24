@@ -561,6 +561,7 @@ async def build_growth_digest(
     skip_refresh: bool = False,
     refresh_limit: int = 60,
     refresh_since_hours: Optional[int] = None,
+    progress_cb=None,
 ) -> Dict[str, Any]:
     """Собрать отчёт «где растут деньги, где теряются».
 
@@ -571,12 +572,23 @@ async def build_growth_digest(
     refresh_since_hours=24 — инкрементальный режим: проходим только по
     сделкам с активностью за сутки. Используется ежедневным cron'ом —
     в 4-5 раз быстрее и дешевле полного скана.
+
+    progress_cb — async callable(text) → None. Если задан, вызывается
+    на ключевых этапах сборки, чтобы UX (placeholder в Telegram) видел
+    что бот не завис.
     """
+    async def _p(text: str):
+        if progress_cb:
+            try:
+                await progress_cb(text)
+            except Exception:
+                pass
     own_client = client is None
     if own_client:
         client = Bitrix24Client()
     try:
         if not skip_refresh:
+            await _p("🔄 Освежаю триггеры по свежим сделкам (~1-2 мин)…")
             logger.info("Growth digest: refreshing signals",
                         limit=refresh_limit, since_hours=refresh_since_hours)
             refresh = await refresh_signals(
@@ -584,16 +596,20 @@ async def build_growth_digest(
             )
             logger.info("Growth digest: signals refreshed", **refresh)
 
+        await _p("📊 Считаю воронку конверсии по менеджерам…")
         funnel = await build_funnel(
             client,
             date_from=date.today() - timedelta(days=period_days),
             date_to=date.today(),
         )
+
+        await _p("💰 Подбиваю упущенную выручку по горящим сигналам…")
         missed = await missed_revenue_summary()
         deal_titles = await _enrich_top_signals(client, missed)
         users_map = await client.get_users_map()
         user_names = {uid: info.get("name", str(uid)) for uid, info in users_map.items()}
 
+        await _p("💬 Подтягиваю выписки из переписок по топ-сделкам…")
         # Расширенный контекст: для топ-сделок добавляем выписки из
         # переписки (DeepSeek сможет цитировать «оплачу завтра» и т.п.).
         comms_by_deal = await _fetch_comms_for_top(missed, per_deal=8)
@@ -615,6 +631,7 @@ async def build_growth_digest(
             + comms_block
         )
 
+        await _p("🤖 DeepSeek формирует разбор и HTML-отчёт (~30-60 сек)…")
         # Пробуем сначала детальный JSON-режим (для HTML-аттача).
         # Fallback на старый одношаговый narrative если что-то пойдёт не так.
         detailed = await _call_deepseek_detailed(context)
