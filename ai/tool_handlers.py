@@ -298,13 +298,24 @@ class ToolHandlers:
         except (TypeError, ValueError):
             period_days = 30
         period_days = max(7, min(period_days, 90))
-        skip_refresh = bool(params.get("skip_refresh"))
+        # On-demand из бота: по умолчанию skip_refresh=True (читаем уже
+        # накопленные триггеры — утренний cron делает свежий refresh в
+        # 09:00 МСК). Без skip_refresh запрос занимал 5-7 минут (60 ×
+        # DeepSeek), с skip_refresh — 30-60 секунд (один итоговый вызов).
+        # Если пользователь явно хочет свежий анализ — передаст skip_refresh=false.
+        skip_refresh = params.get("skip_refresh")
+        if skip_refresh is None:
+            skip_refresh = True
+        else:
+            skip_refresh = bool(skip_refresh)
 
         result = await build_growth_digest(
             client=client,
             period_days=period_days,
             skip_refresh=skip_refresh,
             refresh_limit=60,
+            # Если уж refresh-режим — то инкремент за 24ч, не полный
+            refresh_since_hours=24,
         )
         return {
             "digest_text": result["text"],
