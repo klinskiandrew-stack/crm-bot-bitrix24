@@ -22,6 +22,27 @@ logging.basicConfig(
 logger = structlog.get_logger()
 
 
+_lead_listener_holder = {"obj": None}
+
+
+async def _start_lead_listener_background():
+    """Запускает Telethon-listener в фоне.
+
+    Telethon connection attempts могут висеть минутами на медленной сети.
+    Раньше start_lead_reports_listener() звался синхронно (await) и
+    блокировал event loop ДО старта polling — бот в эти 1-3 минуты не
+    отвечал. Теперь он крутится отдельной задачей; main продолжается
+    немедленно и polling стартует сразу.
+    """
+    try:
+        listener = await start_lead_reports_listener()
+        _lead_listener_holder["obj"] = listener
+        if listener:
+            logger.info("Lead reports listener started in background")
+    except Exception as e:
+        logger.error("Lead reports listener background start failed", error=str(e))
+
+
 async def main():
     """Main entry point."""
     logger.info("Starting bot", bot_token="***")
@@ -70,9 +91,17 @@ async def main():
         except Exception as e:
             logger.error("Failed to start dashboard server", error=str(e))
 
-    # Lead reports listener — Telethon watcher on the sphere ИТМ chat.
-    # Disabled unless LEAD_REPORTS_ENABLED=true; failure never blocks the bot.
-    lead_listener = await start_lead_reports_listener()
+    # Lead reports listener — Telethon watcher на sphere ИТМ.
+    # ⚠️ КРИТИЧНО: запускаем в ФОНЕ через asyncio.create_task. Раньше
+    # был `await start_lead_reports_listener()` — он висел на Telethon
+    # connection retries (4-12 attempts × 12 сек = до 2 минут) и
+    # блокировал event loop. До start_polling никогда не доходило, бот
+    # молчал часами. Disabled unless LEAD_REPORTS_ENABLED=true.
+    lead_listener = None
+    lead_listener_task = asyncio.create_task(
+        _start_lead_listener_background(),
+        name="lead_listener_starter",
+    )
 
     # Polling. aiogram start_polling() при HTTP timeout / сетевой ошибке
     # внутри ловит exception и просто возвращает None — main продолжает
@@ -103,8 +132,15 @@ async def main():
             meetings_scheduler.shutdown(wait=False)
         if dashboard_runner and dashboard_scheduler:
             await stop_dashboard_server(dashboard_runner, dashboard_scheduler)
-        if lead_listener:
-            await lead_listener.stop()
+        # Telethon listener запущен в фоновой задаче — берём его из
+        # holder если он успел подняться. Если не успел — отменяем задачу.
+        lead_listener_task.cancel()
+        listener_obj = _lead_listener_holder.get("obj")
+        if listener_obj:
+            try:
+                await listener_obj.stop()
+            except Exception as e:
+                logger.warning("Lead listener stop failed", error=str(e))
         await db.close()
         await bot.session.close()
         logger.info("Bot shutdown", graceful=graceful_shutdown)
