@@ -236,7 +236,7 @@ async def _send_html_chunked(bot: Bot, chat_id: int, text: str) -> None:
         await bot.send_message(chat_id, clean[i:i + 3900], parse_mode=ParseMode.HTML)
 
 
-async def send_manager_daily(bot: Bot) -> None:
+async def send_manager_daily(bot: Bot, *, override_chat_id: int = 0) -> None:
     """Cron entry — ежедневный утренний отчёт в чат РОПа.
 
     Два блока в одном утреннем заходе:
@@ -250,11 +250,13 @@ async def send_manager_daily(bot: Bot) -> None:
     Это безопасно для UX: РОП утром видит активность сразу, через пару
     минут — стратегический разбор.
     """
-    if not settings.manager_daily_enabled or not settings.manager_daily_chat_id:
-        logger.info("Manager daily report skipped — disabled or no chat id")
+    chat_id = override_chat_id or settings.manager_daily_chat_id
+    if not chat_id:
+        logger.info("Manager daily report skipped — no chat id (and no override)")
         return
-
-    chat_id = settings.manager_daily_chat_id
+    if not override_chat_id and not settings.manager_daily_enabled:
+        logger.info("Manager daily report skipped — disabled")
+        return
     day = _yesterday_msk()
 
     # ============ блок 1: факты за вчера ============

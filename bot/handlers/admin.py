@@ -302,16 +302,25 @@ async def morning_now_command(message: types.Message, user_context: dict = None)
         await message.answer("Доступ запрещен.")
         return
     from reports.manager_daily import send_manager_daily
+    # При вызове из ЛИЧНОГО чата (chat.type == 'private') отчёт шлём
+    # тестово в эту же личку — чтобы РОП-чат не засорять. В обычной
+    # ситуации (cron в 09:00) override_chat_id=0 и идёт в РОП-чат.
+    is_private = message.chat.type == "private"
+    target_chat_id = message.chat.id if is_private else 0
+    target_desc = "в эту личку (тест)" if is_private else "в РОП-чат"
     placeholder = await message.answer(
-        "🌅 Запускаю утренний отчёт. Manager-блок придёт сразу, "
-        "growth-блок через 1-2 минуты (DeepSeek работает)…"
+        f"🌅 Запускаю утренний отчёт, пришлю {target_desc}. "
+        "Manager-блок придёт сразу, growth-блок через 1-2 минуты "
+        "(DeepSeek работает)…"
     )
     try:
         # bot.send_message внутри send_manager_daily использует тот же
         # объект Bot который сейчас работает → правильная сессия + прокси.
-        await send_manager_daily(message.bot)
-        await placeholder.edit_text("✅ Утренний отчёт отправлен в РОП-чат")
-        logger.info("Morning-now run", admin_id=user_context["telegram_id"])
+        await send_manager_daily(message.bot, override_chat_id=target_chat_id)
+        await placeholder.edit_text(f"✅ Утренний отчёт отправлен {target_desc}")
+        logger.info("Morning-now run",
+                    admin_id=user_context["telegram_id"],
+                    target_chat_id=target_chat_id or settings.manager_daily_chat_id)
     except Exception as e:
         logger.error("Morning-now failed", error=str(e))
         await placeholder.edit_text(f"❌ Ошибка: {e}")
