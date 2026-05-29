@@ -24,31 +24,37 @@ from typing import Any, Dict, List, Optional, Tuple
 import structlog
 
 from b24.client import Bitrix24Client
+from growth_intel.stages import is_done, is_lost
 from reports.manager_daily import SALES_MANAGERS
 
 logger = structlog.get_logger()
 
 
 # Семантические группы стадий — независимо от названия воронки.
-# Заточено под Growzone (CATEGORY_ID=0 главная). Если у вас в воронке
-# стадии называются иначе, поправьте маппинг ключевыми словами.
-_STAGE_BUCKETS = [
-    ("created",     ["NEW", "PREPAYMENT", "EXECUTING", "FINAL"]),  # ранние
-    ("measurement", ["ЗАМЕР", "MEASUREMENT", "UC_PEXP"]),           # замер назначен/проведён
-    ("proposal",    ["КП", "PROPOSAL", "OFFER", "UC_OFFER"]),       # подготовка КП
-    ("invoice",     ["СЧЁТ", "СЧЕТ", "INVOICE", "UC_INVOICE"]),    # выставлен счёт
-    ("won",         ["WON"]),
-    ("lost",        ["LOSE", "LOST", "APOLOGY", "JUNK"]),
+# КРИТИЧЕСКОЕ БИЗНЕС-ПРАВИЛО Growzone: «продано» = договор заключён +
+# аванс внесён (STAGE_ID=PREPARATION и далее). Стадия WON в Bitrix —
+# это только финал по деньгам, а коммерческая победа уже на PREPARATION.
+# См. growth_intel/stages.py.
+_STAGE_BUCKETS_EARLY = [
+    ("measurement", ["ЗАМЕР", "MEASUREMENT", "UC_PEXP", "UC_BFLJ2N", "NEW"]),
+    ("proposal",    ["КП", "PROPOSAL", "OFFER", "UC_OFFER", "UC_LW3MC6", "UC_19II4Y"]),
+    ("invoice",     ["СЧЁТ", "СЧЕТ", "INVOICE", "UC_INVOICE"]),
 ]
 
 
 def _bucket_for_stage(stage_id: str) -> Optional[str]:
+    """Stage → bucket. won/lost проверяем через stages.is_done / is_lost
+    (учитывают бизнес-правило Growzone), остальные — по ключевым словам."""
+    if is_done(stage_id):
+        return "won"
+    if is_lost(stage_id):
+        return "lost"
     s = (stage_id or "").upper()
-    for bucket, markers in _STAGE_BUCKETS:
+    for bucket, markers in _STAGE_BUCKETS_EARLY:
         for m in markers:
             if m in s:
                 return bucket
-    return None
+    return "created"   # ранние/без явного маркера
 
 
 async def _fetch_deals_for_manager(

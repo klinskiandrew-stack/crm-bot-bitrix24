@@ -386,18 +386,24 @@ class ToolHandlers:
         month_to_exclusive = next_month.strftime("%Y-%m-%d")
 
         # ------- разбор стадии в bucket -------------------------------
-        # семантически как в growth_intel/funnel.py
+        # КРИТИЧНО: «победа» у Growzone — стадия PREPARATION («Договор
+        # заключён, внесён аванс») и все её последствия (монтаж/финал).
+        # См. growth_intel/stages.py.
+        from growth_intel.stages import is_done as _is_done, is_lost as _is_lost
+
         def _bucket(stage_id: str) -> str:
-            s = (stage_id or "").upper()
-            if "WON" in s:
+            if _is_done(stage_id):
                 return "won"
-            if any(x in s for x in ("LOSE", "LOST", "JUNK", "APOLOGY")):
+            if _is_lost(stage_id):
                 return "lost"
+            s = (stage_id or "").upper()
             if any(x in s for x in ("СЧЁТ", "СЧЕТ", "INVOICE", "UC_INVOICE")):
                 return "invoice"
-            if any(x in s for x in ("КП", "PROPOSAL", "OFFER", "UC_OFFER")):
+            if any(x in s for x in ("КП", "PROPOSAL", "OFFER", "UC_OFFER",
+                                    "UC_LW3MC6", "UC_19II4Y")):
                 return "proposal"
-            if any(x in s for x in ("ЗАМЕР", "MEASUREMENT", "UC_PEXP")):
+            if any(x in s for x in ("ЗАМЕР", "MEASUREMENT", "UC_PEXP",
+                                    "UC_BFLJ2N", "NEW")):
                 return "measurement"
             return "created"
 
@@ -429,11 +435,18 @@ class ToolHandlers:
         if mgr_err:
             return mgr_err
 
-        # ------- запрос 1: WON-сделки за месяц ------------------------
+        # ------- запрос 1: "проданные" сделки за месяц -----------------
+        # БИЗНЕС-ПРАВИЛО Growzone: сделка считается продажей с момента
+        # PREPARATION («Договор заключён, внесён аванс»). Bitrix
+        # STAGE_SEMANTIC_ID=S — только финальная WON, занижает картину.
+        # Фильтруем по DONE_DEAL_STAGES + дате модификации (т.к. сделка
+        # может месяцами висеть в WON, но в PREPARATION ушла в этот
+        # месяц — это и есть продажа этого месяца).
+        from growth_intel.stages import DONE_DEAL_STAGES
         won_filter: Dict[str, Any] = {
-            "STAGE_SEMANTIC_ID": "S",  # success
-            ">=CLOSEDATE": month_from,
-            "<CLOSEDATE": month_to_exclusive,
+            "STAGE_ID": list(DONE_DEAL_STAGES),
+            ">=DATE_MODIFY": month_from,
+            "<DATE_MODIFY": month_to_exclusive,
         }
         if manager_ids:
             won_filter["ASSIGNED_BY_ID"] = manager_ids
@@ -441,7 +454,8 @@ class ToolHandlers:
             "crm.deal.list",
             params={
                 "filter": won_filter,
-                "select": ["ID", "OPPORTUNITY", "ASSIGNED_BY_ID", "STAGE_ID"],
+                "select": ["ID", "OPPORTUNITY", "ASSIGNED_BY_ID", "STAGE_ID",
+                           "DATE_MODIFY", "CLOSEDATE"],
             },
             max_items=500,
         )
