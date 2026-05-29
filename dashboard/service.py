@@ -32,12 +32,13 @@ _MSK = timezone(timedelta(hours=3))
 # достаточно данных, чтобы крутить период от 7 дней до года без перезапроса.
 DEFAULT_LOOKBACK_DAYS = 365
 
-# Сколько лидов/сделок максимум вытащить на канал за обновление.
-# Свежие лиды отдают первыми (order_by_date_desc=True), поэтому при
-# превышении лимита обрезается старый хвост — это безопаснее, чем
-# терять "сегодняшние" лиды как было до фикса.
-LEAD_FETCH_LIMIT = 2500
-DEAL_FETCH_LIMIT = 1500
+# Сколько лидов/сделок максимум вытащить за обновление. Теперь один
+# большой fetch без source-фильтра, классификация в каналы делается в
+# Python (см. _classify_record). Лимиты с запасом — у бизнеса ~150-200
+# лидов/сутки и 30-50 сделок/сутки, за год это ~70K и 15K.
+# С order_by_date_desc=True отрезается старый хвост, не свежий.
+LEAD_FETCH_LIMIT = 5000
+DEAL_FETCH_LIMIT = 3000
 
 # Сколько последних карточек подгружать с таймлайном сразу (остальные —
 # по клику в UI через /api/comments/...).
@@ -70,12 +71,27 @@ LEAD_STATUS_QUALIFIED = "CONVERTED"
 
 # Маппинг каналов: (code, label, yaml_key, utm_source_filter).
 # Для платной рекламы с одинаковым SOURCE_ID=WEB разделение по utm_source.
-CHANNEL_DEFS: List[Tuple[str, str, str, Optional[str]]] = [
-    ("vk",            "ВКонтакте", "ВКонтакте", None),
-    ("avito",         "Авито",     "Авито",     None),
-    ("avito_ads",     "Avito ads", "Avito ads", "avito-ads"),
-    ("yandex",        "Яндекс",    "Яндекс",    "yandex"),
-    ("interception",  "Перехват",  "Перехват",  None),
+# UTM-приоритет в _classify_record: yandex/avito-ads ставят канал даже
+# при SOURCE_ID не из этого канала (фактически только WEB).
+# yaml_key=None у виртуальных каналов (Без источника, Прочее).
+CHANNEL_DEFS: List[Tuple[str, str, Optional[str], Optional[str]]] = [
+    ("vk",             "ВКонтакте",    "ВКонтакте",     None),
+    ("avito",          "Авито",        "Авито",         None),
+    ("avito_ads",      "Avito ads",    "Avito ads",     "avito-ads"),
+    ("yandex",         "Яндекс",       "Яндекс",        "yandex"),
+    ("seo",            "SEO",          "SEO",           None),
+    ("yandex_uslugi",  "Яндекс Услуги","Яндекс Услуги", None),
+    ("profiru",        "Профи.ру",     "Профи.ру",      None),
+    ("whatsapp",       "WhatsApp",     "WhatsApp",      None),
+    ("telegram",       "Telegram",     "Telegram",      None),
+    ("max",            "Max",          "Max",           None),
+    ("interception",   "Перехват",     "Перехват",      None),
+    ("call",           "Звонок",       "Звонок",        None),
+    ("recommendation", "Рекомендация", "Рекомендация",  None),
+    ("partners",       "Партнёры",     "Партнёры",      None),
+    ("other",          "Прочее",       "Прочее",        None),
+    # Виртуальные — не маппятся на YAML-ключ, классификация в Python.
+    ("no_source",      "Без источника", None,           None),
 ]
 
 
@@ -93,11 +109,12 @@ def _load_sources_mapping() -> Dict[str, Any]:
 
 
 def _build_channels() -> List[Dict[str, Any]]:
-    """Собирает список каналов из CHANNEL_DEFS + yaml-маппинга."""
+    """Собирает список каналов из CHANNEL_DEFS + yaml-маппинга.
+    Виртуальные каналы (yaml_key=None) получают пустой source_ids."""
     mapping = _load_sources_mapping()
     out = []
     for code, label, yaml_key, utm_src in CHANNEL_DEFS:
-        cfg = mapping.get(yaml_key) or {}
+        cfg = (mapping.get(yaml_key) if yaml_key else None) or {}
         source_ids = [str(x) for x in (cfg.get("bitrix_source_ids") or [])]
         out.append({
             "code": code,
@@ -146,6 +163,8 @@ class DashboardService:
     def __init__(self, lookback_days: int = DEFAULT_LOOKBACK_DAYS):
         self.lookback_days = lookback_days
         self.channels = _build_channels()
+        # SOURCE_ID -> (channel_code, channel_label) для classify
+        self._source_index = self._build_source_index()
         self.state = CacheState()
         self._lock = asyncio.Lock()
         self._statuses_expire_at: Optional[datetime] = None
@@ -249,70 +268,83 @@ class DashboardService:
 
     # ---------- Internal: data fetching ----------
 
-    async def _fetch_channel_leads(
-        self, b24: Bitrix24Client, channel: Dict[str, Any], date_from: str
-    ) -> List[Dict[str, Any]]:
-        """Лиды одного канала + тег channel-полем. include_full_utm=True даёт
-        UTM_CONTENT/UTM_TERM в select."""
-        if not channel["source_ids"]:
-            return []
-        leads = await b24.get_leads(
-            assigned_by_ids=[],
-            filter_by_date_from=date_from,
-            filter_by_source_ids=channel["source_ids"],
-            filter_by_utm_source=channel.get("utm_source"),
-            include_full_utm=True,
-            order_by_date_desc=True,  # свежие первыми, чтобы лимит не отрезал актуал
-            limit=LEAD_FETCH_LIMIT,
-        )
-        if not isinstance(leads, list):
-            return []
-        for l in leads:
-            l["_channel"] = channel["code"]
-            l["_channel_label"] = channel["label"]
-        return leads
+    def _build_source_index(self) -> Dict[str, Tuple[str, str]]:
+        """SOURCE_ID -> (channel_code, channel_label). Используется
+        _classify_record для классификации записей в каналы.
 
-    async def _fetch_channel_deals(
-        self, b24: Bitrix24Client, channel: Dict[str, Any], date_from: str
-    ) -> List[Dict[str, Any]]:
-        if not channel["source_ids"]:
-            return []
-        deals = await b24.get_deals(
-            assigned_by_ids=[],
-            filter_by_date_from=date_from,
-            filter_by_source_ids=channel["source_ids"],
-            filter_by_utm_source=channel.get("utm_source"),
-            order_by_date_desc=True,
-            limit=DEAL_FETCH_LIMIT,
-        )
-        if not isinstance(deals, list):
-            return []
-        for d in deals:
-            d["_channel"] = channel["code"]
-            d["_channel_label"] = channel["label"]
-        return deals
+        Каналы с utm_source-фильтром (Яндекс, Avito ads) НЕ добавляют
+        свои source_ids в индекс — они идентифицируются ТОЛЬКО по UTM.
+        SOURCE_ID=WEB без UTM считается «Веб-сайт без атрибуции» = Прочее
+        (см. описание Яндекс-канала в sources_mapping.yaml).
+        """
+        idx: Dict[str, Tuple[str, str]] = {}
+        for ch in self.channels:
+            if ch["code"] in ("no_source",):
+                continue
+            if ch.get("utm_source"):
+                continue  # UTM-only канал — не маппим SOURCE_ID
+            for sid in ch["source_ids"]:
+                idx[sid] = (ch["code"], ch["label"])
+        return idx
+
+    def _classify_record(self, record: Dict[str, Any]) -> Tuple[str, str]:
+        """Определяет (channel_code, channel_label) для лида/сделки.
+
+        Приоритет:
+          1) UTM_SOURCE=yandex → Яндекс (даже если SOURCE_ID не WEB)
+          2) UTM_SOURCE=avito-ads → Avito ads
+          3) SOURCE_ID есть в одном из каналов → этот канал
+          4) SOURCE_ID пустой → Без источника (marketing leak)
+          5) SOURCE_ID есть но не в YAML → Прочее
+        """
+        utm = (record.get("UTM_SOURCE") or "").strip().lower()
+        if utm == "yandex":
+            return "yandex", "Яндекс"
+        if utm == "avito-ads":
+            return "avito_ads", "Avito ads"
+        sid = str(record.get("SOURCE_ID") or "").strip()
+        if sid and sid in self._source_index:
+            return self._source_index[sid]
+        if not sid:
+            return "no_source", "Без источника"
+        return "other", "Прочее"
 
     async def _refresh_inner(self, b24: Bitrix24Client) -> None:
         date_from = (datetime.now(_MSK).date() - timedelta(days=self.lookback_days)).strftime("%Y-%m-%d")
 
-        # 1. Параллельно по каналам.
-        lead_tasks = [self._fetch_channel_leads(b24, c, date_from) for c in self.channels]
-        deal_tasks = [self._fetch_channel_deals(b24, c, date_from) for c in self.channels]
-        all_results = await asyncio.gather(*lead_tasks, *deal_tasks, return_exceptions=True)
-        n = len(self.channels)
-        lead_results = all_results[:n]
-        deal_results = all_results[n:]
+        # 1. ОДИН большой fetch без source-фильтра. Раньше делали 5+
+        #    параллельных запросов по каждому каналу — это упускало все
+        #    лиды/сделки с SOURCE_ID не из CHANNEL_DEFS (например, без
+        #    источника или из YAML-Прочее: 30+% выручки). Теперь
+        #    классификация в каналы делается в Python (_classify_record).
+        leads_task = b24.get_leads(
+            assigned_by_ids=[],
+            filter_by_date_from=date_from,
+            include_full_utm=True,
+            order_by_date_desc=True,
+            limit=LEAD_FETCH_LIMIT,
+        )
+        deals_task = b24.get_deals(
+            assigned_by_ids=[],
+            filter_by_date_from=date_from,
+            order_by_date_desc=True,
+            limit=DEAL_FETCH_LIMIT,
+        )
+        leads_res, deals_res = await asyncio.gather(leads_task, deals_task, return_exceptions=True)
+        leads = leads_res if isinstance(leads_res, list) else []
+        deals = deals_res if isinstance(deals_res, list) else []
 
-        leads: List[Dict[str, Any]] = []
-        deals: List[Dict[str, Any]] = []
-        for res in lead_results:
-            if isinstance(res, list):
-                leads.extend(res)
-        for res in deal_results:
-            if isinstance(res, list):
-                deals.extend(res)
+        # 2. Классификация по каналам.
+        for r in leads:
+            code, label = self._classify_record(r)
+            r["_channel"] = code
+            r["_channel_label"] = label
+        for r in deals:
+            code, label = self._classify_record(r)
+            r["_channel"] = code
+            r["_channel_label"] = label
 
-        # Дедуп по ID (на всякий случай).
+        # 3. Дедуп по ID (на всякий случай).
         seen = set()
         uniq = []
         for l in leads:
