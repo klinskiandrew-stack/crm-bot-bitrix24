@@ -189,10 +189,51 @@ def _safe_int(v: Any) -> int:
         return 0
 
 
+import re as _re
+
+# Telegram parse_mode=HTML принимает узкий whitelist:
+#   b, strong, i, em, u, ins, s, strike, del, span (tg-spoiler), tg-spoiler,
+#   a (href), code, pre, blockquote, tg-emoji
+# DeepSeek в дайджестах любит вставлять <br/>, <p>, <div>, <span class>
+# которые ломают парсинг "Bad Request: Unsupported start tag". Чистим.
+_HTML_BAD_TAG_RE = _re.compile(
+    r"<\s*/?\s*(br|p|div|hr|h[1-6]|ul|ol|li|table|tr|td|th|tbody|thead|tfoot|"
+    r"img|figure|figcaption|article|section|main|nav|footer|header|aside|"
+    r"font|center|small|big|sub|sup|mark|abbr|cite|q|dfn|samp|kbd|var|time)\b[^>]*>",
+    _re.IGNORECASE,
+)
+# <span class="..."> и <a target="..."> — обрезать атрибуты до простого
+# тега. Сначала <a href> сохраняем как есть, потом убираем остальные.
+_HTML_SPAN_RE = _re.compile(r"<\s*span\b[^>]*>", _re.IGNORECASE)
+_HTML_CLOSE_SPAN_RE = _re.compile(r"<\s*/\s*span\s*>", _re.IGNORECASE)
+
+
+def _sanitize_telegram_html(text: str) -> str:
+    """Привести произвольный HTML к whitelist'у Telegram."""
+    if not text:
+        return ""
+    # <br/> и <br> → перевод строки
+    out = _re.sub(r"<\s*br\s*/?\s*>", "\n", text, flags=_re.IGNORECASE)
+    # <p>...</p> → блок с переводом строк
+    out = _re.sub(r"<\s*/?\s*p\b[^>]*>", "\n", out, flags=_re.IGNORECASE)
+    # span → текст без тега
+    out = _HTML_SPAN_RE.sub("", out)
+    out = _HTML_CLOSE_SPAN_RE.sub("", out)
+    # остальные неподдерживаемые теги — выкидываем целиком
+    out = _HTML_BAD_TAG_RE.sub("", out)
+    # схлопываем тройные переводы
+    out = _re.sub(r"\n{3,}", "\n\n", out)
+    return out.strip()
+
+
 async def _send_html_chunked(bot: Bot, chat_id: int, text: str) -> None:
-    """Telegram режет сообщения > 4096 — режем сами по 3900."""
-    for i in range(0, len(text), 3900):
-        await bot.send_message(chat_id, text[i:i + 3900], parse_mode=ParseMode.HTML)
+    """Telegram режет сообщения > 4096 — режем сами по 3900.
+    Перед отправкой санитайзим HTML — DeepSeek любит <br/>, <p>, <span class>
+    которые Telegram отвергает с 'Bad Request: Unsupported start tag'.
+    """
+    clean = _sanitize_telegram_html(text)
+    for i in range(0, len(clean), 3900):
+        await bot.send_message(chat_id, clean[i:i + 3900], parse_mode=ParseMode.HTML)
 
 
 async def send_manager_daily(bot: Bot) -> None:
