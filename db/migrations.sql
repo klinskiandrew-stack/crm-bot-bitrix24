@@ -355,3 +355,23 @@ CREATE TABLE IF NOT EXISTS deal_stage_history (
     UNIQUE(deal_id, stage_id, entered_at)
 );
 CREATE INDEX IF NOT EXISTS idx_deal_stage_history_deal ON deal_stage_history(deal_id, entered_at);
+
+-- =========================================================================
+-- sheets_watcher: маппинг строк Google Sheets → созданных лидов в Bitrix24.
+-- Уникальный ключ — (sheet_id, external_id) где external_id это «номер
+-- заявки» из таблицы (колонка «Заявка:»). Защищает от повторного
+-- создания того же лида при перезапуске сервиса.
+-- =========================================================================
+CREATE TABLE IF NOT EXISTS sheet_lead_imports (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    sheet_id     TEXT NOT NULL,
+    external_id  TEXT NOT NULL,     -- значение из колонки «Заявка:»
+    row_index    INTEGER,            -- номер строки в таблице (1-based, для отладки)
+    b24_lead_id  INTEGER,            -- созданный лид, NULL если упало
+    title        TEXT,
+    phone        TEXT,
+    error        TEXT,
+    created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(sheet_id, external_id)
+);
+CREATE INDEX IF NOT EXISTS idx_sheet_imports_sheet ON sheet_lead_imports(sheet_id, created_at DESC);

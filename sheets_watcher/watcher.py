@@ -79,8 +79,17 @@ async def check_one_sheet(
     *,
     label: str = "",
     worksheet_index: int = 0,
+    import_to_b24: bool = False,
+    source_id: str = "8",
+    utm_source: str = "",
 ) -> int:
-    """Проверить одну таблицу. Возвращает число новых строк."""
+    """Проверить одну таблицу. Возвращает число обработанных строк.
+
+    Если import_to_b24=True — для каждой новой строки создаётся лид в
+    Bitrix24 (через sheets_watcher.importer), и уведомление содержит
+    реальные ID созданных лидов. Иначе — просто уведомление со списком
+    новых строк.
+    """
     if not settings.admin_telegram_id:
         logger.info("sheets_watcher skipped — no admin_telegram_id")
         return 0
@@ -95,26 +104,81 @@ async def check_one_sheet(
         return 0
     headers = rows[0] if rows else []
 
+    # Ветка с импортом в Bitrix — дедупликация через sheet_lead_imports
+    # таблицу (по external_id), а не через last_seen_count. Это значит
+    # даже если строку удалят и снова добавят с тем же ID заявки —
+    # дубля не будет. И при ПЕРВОМ прогоне импортируем всё что есть.
+    if import_to_b24:
+        from b24.client import Bitrix24Client
+        from sheets_watcher.importer import import_new_rows
+        client = Bitrix24Client()
+        try:
+            result = await import_new_rows(
+                client, rows,
+                sheet_id=sheet_id,
+                source_id=source_id,
+                utm_source=utm_source,
+            )
+        finally:
+            try:
+                await client.close()
+            except Exception:
+                pass
+
+        created = result.get("created") or []
+        failed = result.get("failed", 0)
+        if not created and not failed:
+            return 0   # ничего нового — молчим
+
+        sheet_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/edit"
+        portal = (settings.b24_portal_url or "").rstrip("/")
+        title = label or "Google Sheets"
+        lines = [f"📥 <b>{title}: импортировано лидов в Bitrix — {len(created)}</b>"]
+        if failed:
+            lines.append(f"⚠️ Не удалось создать: {failed}")
+        lines.append("")
+        for c in created[:10]:
+            lead_link = (
+                f"<a href=\"{portal}/crm/lead/details/{c['lead_id']}/\">#{c['lead_id']}</a>"
+                if portal else f"#{c['lead_id']}"
+            )
+            name_short = (c.get("title") or "")[:80]
+            phone = c.get("phone") or ""
+            lines.append(f"{lead_link} — {name_short}" + (f" · {phone}" if phone else ""))
+        if len(created) > 10:
+            lines.append(f"…и ещё {len(created) - 10} лидов")
+        lines.append(
+            f"\nИсточник: <b>Перехват конкурентов</b> · UTM_SOURCE: <code>{utm_source or '—'}</code>"
+        )
+        lines.append(f"<a href=\"{sheet_url}\">📎 Открыть таблицу</a>")
+        text = "\n".join(lines)
+        if len(text) > 4000:
+            text = text[:3900] + "\n…(обрезано)"
+        try:
+            await bot.send_message(
+                settings.admin_telegram_id, text, parse_mode=ParseMode.HTML,
+                disable_web_page_preview=True,
+            )
+            logger.info("sheets_watcher import done",
+                        sheet_id=sheet_id, created=len(created), failed=failed)
+        except Exception as e:
+            logger.error("sheets_watcher import notify failed",
+                         sheet_id=sheet_id, error=str(e))
+        return len(created)
+
+    # Старый режим — просто уведомление о новых строках, без импорта.
     last_seen = await _get_last_seen(sheet_id)
-    # Первый запуск — запоминаем текущее состояние без уведомлений
-    # (иначе РОПу прилетит все исторические лиды одной кучей).
     if last_seen == 0:
         await _save_last_seen(sheet_id, total)
         logger.info("sheets_watcher initialized", sheet_id=sheet_id, total=total)
         return 0
-
     if total <= last_seen:
         return 0
-
     new_rows = rows[last_seen:]
     new_count = len(new_rows)
-
     sheet_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/edit"
     title = label or "Google Sheets"
-    text_parts = [
-        f"📋 <b>{title}: новых лидов {new_count}</b>",
-        "",
-    ]
+    text_parts = [f"📋 <b>{title}: новых лидов {new_count}</b>", ""]
     for i, row in enumerate(new_rows[:10], 1):
         text_parts.append(f"<b>#{last_seen + i}</b>")
         text_parts.append(_format_row(row, headers))
@@ -123,11 +187,9 @@ async def check_one_sheet(
         text_parts.append(f"…и ещё {new_count - 10} строк")
     text_parts.append(f"\n<a href=\"{sheet_url}\">📎 Открыть таблицу</a>")
     text = "\n".join(text_parts)
-
+    if len(text) > 4000:
+        text = text[:3900] + "\n…(обрезано)"
     try:
-        # Telegram parse_mode=HTML лимит 4096; обрезаем если что
-        if len(text) > 4000:
-            text = text[:3900] + "\n…(обрезано)"
         await bot.send_message(
             settings.admin_telegram_id, text, parse_mode=ParseMode.HTML,
             disable_web_page_preview=True,
@@ -176,7 +238,12 @@ async def check_all_watched(bot: Bot) -> Dict[str, int]:
             ws_idx = 0
         try:
             out[sid] = await check_one_sheet(
-                bot, sid, label=label, worksheet_index=ws_idx,
+                bot, sid,
+                label=label,
+                worksheet_index=ws_idx,
+                import_to_b24=bool(t.get("import_to_b24")),
+                source_id=str(t.get("source_id") or "8"),
+                utm_source=str(t.get("utm_source") or ""),
             )
         except Exception as e:
             logger.error("sheets_watcher target failed",
