@@ -100,35 +100,82 @@ async def _fetch_deal_contacts(client: Bitrix24Client, deal_id: int) -> List[Dic
 
 # ----- files (из уже полученных activities) --------------------------------
 
-def _extract_files_from_activities(
-    deal_id: int, activities: List[Dict[str, Any]]
+async def _extract_files_from_activities(
+    client: Bitrix24Client,
+    deal_id: int,
+    activities: List[Dict[str, Any]],
+    *,
+    max_files: int = 5,
 ) -> List[Dict[str, Any]]:
-    """FILES уже приходят в crm.activity.list (мы запрашиваем поле FILES).
-    Дополнительный запрос не нужен — просто перепаковываем."""
-    files: List[Dict[str, Any]] = []
+    """FILES в crm.activity.list содержат только {id, url} — БЕЗ имени.
+    Чтобы дайджест показывал «КП.pdf» а не «файл», дозапрашиваем
+    disk.file.get для каждого. Дорого (1 запрос на файл), поэтому
+    cap на max_files свежайших — для дайджеста этого достаточно.
+
+    Звонковые .mp3 (Mango/Voximplant) пропускаем — они уже в
+    deal_communications как call с расшифровкой, дублировать смысла нет.
+    """
+    # Сначала собираем кандидатов (id + activity meta), потом из них
+    # берём max_files свежайших и дозаpрашиваем имя.
+    raw_files: List[Dict[str, Any]] = []
     for a in activities or []:
         att = a.get("FILES")
         if not isinstance(att, list):
             continue
         aid = str(a.get("ID") or "")
+        provider = a.get("PROVIDER_ID") or ""
+        # Звонковые провайдеры — записи разговоров, не нужны в файлах
+        if provider in ("VOXIMPLANT_CALL", "REST_APP"):
+            continue
         for f in att:
             if not isinstance(f, dict):
                 continue
             fid = f.get("id") or f.get("ID")
-            name = f.get("name") or f.get("NAME") or "файл"
             if not fid:
                 continue
-            files.append({
+            raw_files.append({
                 "file_id": str(fid),
-                "name": str(name),
-                "size_bytes": f.get("size"),
-                "mime_type": None,   # disk.file.get вернул бы, но запрос дорогой
-                "uploaded_at": _parse_dt(a.get("CREATED") or a.get("START_TIME")),
-                "uploaded_by": a.get("RESPONSIBLE_ID"),
                 "activity_id": aid,
-                "download_url": None,  # короткоживущий, генерим лениво
+                "activity_created": a.get("CREATED") or a.get("START_TIME"),
+                "uploaded_by": a.get("RESPONSIBLE_ID"),
+                "provider": provider,
             })
-    return files
+
+    # Сортировка по дате убывающе + cap
+    raw_files.sort(key=lambda x: x.get("activity_created") or "", reverse=True)
+    raw_files = raw_files[:max_files]
+
+    out: List[Dict[str, Any]] = []
+    for rf in raw_files:
+        try:
+            meta_resp = await client._call("disk.file.get", {"id": int(rf["file_id"])})
+        except Exception as e:
+            logger.warning("disk.file.get failed", file_id=rf["file_id"], error=str(e))
+            meta_resp = None
+        meta = (meta_resp or {}).get("result") or {}
+        name = meta.get("NAME") or "файл"
+        # Звонковые mp3 имеют технические имена «MToxMDE5...mp3» — скрываем
+        # как «Запись звонка» (хотя они и не должны сюда попасть после
+        # фильтра по provider, но на всякий случай).
+        if name.endswith(".mp3") and len(name) > 30 and not any(
+            c.isalpha() and ord(c) > 127 for c in name[:20]
+        ):
+            name = "Запись звонка.mp3"
+        try:
+            size = int(meta.get("SIZE") or 0) or None
+        except (TypeError, ValueError):
+            size = None
+        out.append({
+            "file_id": str(rf["file_id"]),
+            "name": name,
+            "size_bytes": size,
+            "mime_type": meta.get("TYPE"),
+            "uploaded_at": _parse_dt(meta.get("CREATE_TIME") or rf["activity_created"]),
+            "uploaded_by": rf.get("uploaded_by"),
+            "activity_id": rf["activity_id"],
+            "download_url": None,   # DOWNLOAD_URL короткоживущий, в БД не храним
+        })
+    return out
 
 
 # ----- invoices ------------------------------------------------------------
@@ -272,9 +319,12 @@ async def enrich_deal(
     except Exception as e:
         logger.warning("enrich: contacts failed", deal_id=deal_id, error=str(e))
 
-    # files (из уже-полученных activities — без дополнительного запроса)
+    # files: для каждого файла дополнительно дёргаем disk.file.get чтобы
+    # получить настоящее имя и размер (в crm.activity FILES только {id, url}).
     try:
-        files = _extract_files_from_activities(deal_id, activities or [])
+        files = await _extract_files_from_activities(
+            client, deal_id, activities or [], max_files=5,
+        )
         if files:
             res["files"] = await upsert_files(deal_id, files)
     except Exception as e:
