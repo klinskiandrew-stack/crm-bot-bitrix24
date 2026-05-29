@@ -11,6 +11,7 @@ HTTP-эндпоинты читают только кэш — никаких пр
 """
 
 import asyncio
+import pickle
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -49,6 +50,12 @@ REJECTION_REASON_DETAIL_UF = "UF_CRM_1723465843"
 # Кастомное поле "source" (string) — пользователь добавил для своей
 # атрибуции трафика. Дашборд просто пробрасывает в UI как колонку.
 CUSTOM_SOURCE_UF = "UF_CRM_1779993536"
+
+# Persisted-кэш на диске. Бот частые рестарты (систем-апдейты, OOM,
+# деплои) → пустой in-memory кэш → у пользователя дашборд показывает
+# нули, пока первый refresh не отработает. Сохраняем снапшот после
+# каждого успешного refresh и грузим при старте — UX без провалов.
+CACHE_DISK_PATH = Path("data/dashboard_cache.pickle")
 
 # Основная воронка ("Автополивы Сделки") = category_id 0.
 DEAL_CATEGORY = 0
@@ -142,6 +149,37 @@ class DashboardService:
         self.state = CacheState()
         self._lock = asyncio.Lock()
         self._statuses_expire_at: Optional[datetime] = None
+        # Грузим прошлый снапшот с диска — переживает рестарт бота.
+        self._load_cache_from_disk()
+
+    def _load_cache_from_disk(self) -> None:
+        """Восстанавливает state из persisted-кэша. Тихий fail при ошибке."""
+        if not CACHE_DISK_PATH.exists():
+            return
+        try:
+            with open(CACHE_DISK_PATH, "rb") as f:
+                saved = pickle.load(f)
+            if isinstance(saved, CacheState):
+                self.state = saved
+                logger.info(
+                    "Dashboard cache restored from disk",
+                    leads=len(saved.leads),
+                    deals=len(saved.deals),
+                    last_refresh=str(saved.last_refresh),
+                )
+        except Exception as e:
+            logger.warning("Failed to load dashboard cache", error=str(e))
+
+    def _save_cache_to_disk(self) -> None:
+        """Atomic write через .tmp + rename. Не критично если упадёт."""
+        try:
+            CACHE_DISK_PATH.parent.mkdir(parents=True, exist_ok=True)
+            tmp = CACHE_DISK_PATH.with_suffix(".tmp")
+            with open(tmp, "wb") as f:
+                pickle.dump(self.state, f, protocol=pickle.HIGHEST_PROTOCOL)
+            tmp.replace(CACHE_DISK_PATH)
+        except Exception as e:
+            logger.warning("Failed to save dashboard cache", error=str(e))
 
     # ---------- Public API ----------
 
@@ -201,6 +239,8 @@ class DashboardService:
                     channels=[c["code"] for c in self.channels],
                     seconds=round(duration, 2),
                 )
+                # Persist в файл — переживёт рестарт бота.
+                self._save_cache_to_disk()
             except Exception as e:
                 logger.exception("Dashboard refresh failed")
                 self.state.last_error = f"{type(e).__name__}: {e}"

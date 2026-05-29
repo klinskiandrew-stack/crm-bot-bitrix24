@@ -674,7 +674,17 @@ async function fetchData() {
   try {
     const res = await fetch('/api/leads', { cache: 'no-store' });
     if (!res.ok) throw new Error('HTTP ' + res.status);
-    state.data = await res.json();
+    const fresh = await res.json();
+    // Если сервер вернул ПУСТОЙ кэш (бот рестартовал, refresh ещё не
+    // отработал) — не стираем уже отображённые данные, показываем
+    // только плашку «сервер обновляется».
+    const empty = !fresh.last_refresh || ((fresh.leads || []).length === 0 && (fresh.deals || []).length === 0);
+    if (empty && state.data) {
+      document.getElementById('last-refresh').textContent =
+        '⏳ Сервер обновляется… последние данные: ' + fmtDate(state.data.last_refresh);
+      return;
+    }
+    state.data = fresh;
     render();
   } catch (e) {
     console.error(e);
