@@ -133,4 +133,13 @@ async def run_batch(limit: int = 3) -> dict:
         "Sales-comms transcribe batch finished",
         processed=len(pending), ok=ok, failed=failed,
     )
+    # ВАЖНО: выгружаем модель Whisper после батча. На сервере 3.8GB RAM,
+    # модель занимает 1.2GB; если её держать постоянно + bot ~600MB +
+    # пиковая нагрузка → OOM-killer убивает процесс. Reload между батчами
+    # стоит ~9 сек — копейки по сравнению с риском перезапуска.
+    try:
+        stt.unload()
+    except Exception as e:
+        logger.warning("Whisper unload failed", error=str(e))
+
     return {"processed": len(pending), "ok": ok, "failed": failed}

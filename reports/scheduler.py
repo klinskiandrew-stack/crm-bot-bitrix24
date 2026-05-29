@@ -203,12 +203,12 @@ async def _run_sales_comms_sync() -> None:
 
 
 async def _run_sales_comms_transcribe() -> None:
-    """Every 2 min: жуёт до 8 pending-звонков из deal_communications.
-    Реальная скорость на нашем CPU ~30с/звонок, 8 файлов = ~4 мин,
-    плотно укладываемся в окно с misfire_grace=120."""
+    """Every 4 min: жуёт до 5 pending-звонков из deal_communications.
+    После batch'а run_batch сам выгружает модель Whisper, чтобы не
+    держать 1.2GB постоянно — иначе на 3.8GB сервере OOM-killer."""
     try:
         from sales_comms.transcribe import run_batch
-        result = await run_batch(limit=8)
+        result = await run_batch(limit=5)
         if result.get("processed"):
             logger.info("sales_comms_transcribe done", **result)
     except Exception as e:
@@ -338,17 +338,18 @@ def start_report_scheduler(bot: Bot) -> Optional[AsyncIOScheduler]:
             id="sales_comms_sync",
             misfire_grace_time=1800,
         )
-        # Whisper для звонков — каждые 2 минуты, до 8 файлов за раз.
-        # Прежняя настройка (3 файла / 5 мин) недозагружала CPU: средний
-        # звонок жуётся ~30 сек, итого 1.5 мин работы из 5-мин окна.
-        # Сейчас 8 × 30с = ~4 мин, плотно укладываемся в 2-мин окно с
-        # учётом перекрытия в misfire_grace. RAM держится одна модель
-        # (singleton stt._model), OOM-риска нет.
+        # Whisper для звонков — каждые 4 минуты, до 5 файлов за раз.
+        # ⚠️ ИСТОРИЯ: пробовали 8 файлов / 2 мин — словили OOM-killer
+        # 9 раз подряд (RSS пиком 3GB при сервере 3.8GB + 2GB swap полон).
+        # После batch вызываем stt.unload() — модель Whisper (1.2GB)
+        # выгружается, основной бот остаётся ~600MB. Reload в начале
+        # следующего batch стоит ~9 сек. Net: 5 × 30с + 9с reload ≈
+        # 2.5 мин из 4-мин окна, ~75 файлов/час, безопасно по RAM.
         scheduler.add_job(
             _run_sales_comms_transcribe,
-            CronTrigger(minute="*/2", timezone=tz),
+            CronTrigger(minute="*/4", timezone=tz),
             id="sales_comms_transcribe",
-            misfire_grace_time=120,
+            misfire_grace_time=180,
         )
         # Часовая сводка прогресса в личку админа (sales_comms + growth_intel).
         # На :45, чтобы данные после sync (:17) и нескольких Whisper-проходов
