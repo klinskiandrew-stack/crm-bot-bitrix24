@@ -189,36 +189,70 @@ def _safe_int(v: Any) -> int:
         return 0
 
 
+async def _send_html_chunked(bot: Bot, chat_id: int, text: str) -> None:
+    """Telegram режет сообщения > 4096 — режем сами по 3900."""
+    for i in range(0, len(text), 3900):
+        await bot.send_message(chat_id, text[i:i + 3900], parse_mode=ParseMode.HTML)
+
+
 async def send_manager_daily(bot: Bot) -> None:
-    """Cron entry — build yesterday's report and post it to the РОП chat."""
+    """Cron entry — ежедневный утренний отчёт в чат РОПа.
+
+    Два блока в одном утреннем заходе:
+      1. <b>Факты за вчера</b> — манагерская активность из manager_daily:
+         звонки/задачи/письма + минуты разговоров + новые сделки.
+      2. <b>Точки роста выручки</b> — growth_intel digest: где клиент
+         готов платить и менеджер не отреагировал, какие сделки горят,
+         воронка по каждому менеджеру, рекомендации.
+
+    Первый блок шлётся сразу, второй после refresh_signals (5-7 минут).
+    Это безопасно для UX: РОП утром видит активность сразу, через пару
+    минут — стратегический разбор.
+    """
     if not settings.manager_daily_enabled or not settings.manager_daily_chat_id:
         logger.info("Manager daily report skipped — disabled or no chat id")
         return
 
+    chat_id = settings.manager_daily_chat_id
     day = _yesterday_msk()
+
+    # ============ блок 1: факты за вчера ============
     b24 = Bitrix24Client()
+    activity_text: str = ""
     try:
-        text = await build_manager_daily_report(b24, day)
+        activity_text = await build_manager_daily_report(b24, day)
     except Exception as e:
         logger.error("Manager daily report build failed", error=str(e))
-        return
     finally:
         try:
             await b24.close()
         except Exception:
             pass
 
+    if activity_text:
+        try:
+            await _send_html_chunked(bot, chat_id, activity_text)
+            logger.info("Manager daily activity block sent",
+                        chat_id=chat_id, chars=len(activity_text))
+        except Exception as e:
+            logger.error("Manager daily activity send failed", error=str(e))
+
+    # ============ блок 2: growth_intel дайджест ============
+    if not settings.growth_intel_enabled:
+        logger.info("Growth-intel block disabled — skipping")
+        return
+
     try:
-        await bot.send_message(
-            settings.manager_daily_chat_id,
-            text,
-            parse_mode=ParseMode.HTML,
-        )
-        logger.info(
-            "Manager daily report sent",
-            chat_id=settings.manager_daily_chat_id,
-            day=day.isoformat(),
-            chars=len(text),
-        )
+        from growth_intel.digest import build_growth_digest
+        result = await build_growth_digest(period_days=30, skip_refresh=False)
+        growth_text = result.get("text") or ""
+        if not growth_text:
+            logger.warning("Growth-intel returned empty text — skip")
+            return
+        await _send_html_chunked(bot, chat_id, growth_text)
+        logger.info("Growth-intel block sent",
+                    chat_id=chat_id, chars=len(growth_text),
+                    at_risk=result.get("total_at_risk_rub"),
+                    signals=result.get("signals_count"))
     except Exception as e:
-        logger.error("Manager daily report send failed", error=str(e))
+        logger.error("Growth-intel block failed", error=str(e))

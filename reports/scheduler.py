@@ -362,10 +362,16 @@ def start_report_scheduler(bot: Bot) -> Optional[AsyncIOScheduler]:
             misfire_grace_time=600,
         )
 
-    # Weekly growth_intel digest — «где растут деньги, где теряются».
-    # По понедельникам в 09:15 МСК (через 15 мин после manager_daily,
-    # чтобы не пересекаться с DeepSeek).
-    if settings.growth_intel_enabled and (settings.sales_digest_chat_id or settings.manager_daily_chat_id):
+    # ⚠️ Прежний еженедельный growth_intel_digest (понедельник 09:15)
+    # отключён — теперь growth-блок встроен в ежедневный manager_daily
+    # как второе сообщение после блока активности. См. reports/
+    # manager_daily.py::send_manager_daily.
+    # Сохраняем job как опциональный — на случай если нужно слать
+    # отдельный «глубокий» дайджест вручную через /loop или другим
+    # каналом. Включить можно флагом growth_intel_weekly_enabled.
+    if getattr(settings, "growth_intel_weekly_enabled", False) and (
+        settings.sales_digest_chat_id or settings.manager_daily_chat_id
+    ):
         scheduler.add_job(
             _run_growth_intel_digest,
             CronTrigger(

@@ -109,10 +109,15 @@ class Settings(BaseSettings):
     # уже расшифрованных звонках (см. transcription_status='done').
     sales_comms_transcribe_enabled: bool = True
 
-    # growth_intel — еженедельный отчёт «где теряем деньги» с триггерами
-    # из переписки. Тяжёлый (DeepSeek по 60 сделкам, ~5-10 мин), поэтому
-    # только раз в неделю + on-demand по запросу из бота.
+    # growth_intel — отчёт «где теряем деньги» с триггерами из переписки.
+    # Тяжёлый (DeepSeek по 60-100 сделкам, ~5-10 мин). Сейчас встроен в
+    # ежедневный manager_daily-отчёт как второе сообщение — см.
+    # reports/manager_daily.py::send_manager_daily.
     growth_intel_enabled: bool = True
+    # ⚠️ Старый еженедельный отдельный cron (понедельник 09:15) отключён
+    # по умолчанию — задаётся через growth_intel_weekly_enabled=true,
+    # если когда-нибудь захотим параллельно с ежедневным.
+    growth_intel_weekly_enabled: bool = False
     growth_intel_weekday: str = "mon"
     growth_intel_hour: int = 9
     growth_intel_minute: int = 15
