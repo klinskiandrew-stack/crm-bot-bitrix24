@@ -358,6 +358,9 @@ class Bitrix24Client:
             # Причина отказа (enumeration) — нужна дашборду для колонки
             # неквала. Резолв ID→VALUE делается в dashboard/service.py.
             "UF_CRM_1740994523382",
+            # «source» (кастомное поле, string) — добавлено пользователем
+            # 2026-05 для маркировки трафика. Дашборд показывает колонкой.
+            "UF_CRM_1779993536",
         ]
         if include_full_utm:
             # Extra fields for the Excel export: ad creative/keyword + phone.
