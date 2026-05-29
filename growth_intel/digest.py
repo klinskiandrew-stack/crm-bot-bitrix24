@@ -174,7 +174,153 @@ async def _enrich_top_signals(
     return titles
 
 
+async def _fetch_comms_for_top(missed: Dict[str, Any], per_deal: int = 8) -> Dict[int, List[Dict[str, Any]]]:
+    """Для каждой топ-сделки достать последние коммуникации из sales_comms.
+    Используется в детальном HTML-отчёте: цитаты из звонков и переписки.
+    """
+    from sales_comms.db import communications_for_deal
+    deal_ids = sorted({int(s["deal_id"]) for s in missed.get("top_signals", [])})
+    out: Dict[int, List[Dict[str, Any]]] = {}
+    for did in deal_ids[:12]:   # cap чтобы не перегрузить промпт
+        try:
+            comms = await communications_for_deal(did, max_items=per_deal)
+            # сортируем хронологически (старое → новое) — LLM лучше читает
+            comms.sort(key=lambda c: c.get("occurred_at") or "")
+            out[did] = comms
+        except Exception as e:
+            logger.warning("fetch comms for deal failed", deal_id=did, error=str(e))
+    return out
+
+
+def _format_comms_for_signal(
+    deal_id: int,
+    comms: List[Dict[str, Any]],
+    char_cap: int = 1800,
+) -> str:
+    """Превратить коммуникации одной сделки в компактный текст для DeepSeek."""
+    if not comms:
+        return ""
+    lines = []
+    for c in comms:
+        ts = (c.get("occurred_at") or "")[:16].replace("T", " ")
+        src = c.get("source_type", "?")
+        direction = c.get("direction") or ""
+        author = c.get("author_name") or ("клиент" if direction == "in" else "?")
+        text = (c.get("text") or "").strip().replace("\n", " ")
+        if not text and src == "call":
+            dur = c.get("duration_sec") or 0
+            lines.append(f"  [{ts}] звонок {dur}с (без расшифровки)")
+            continue
+        if not text:
+            continue
+        if src == "call":
+            lines.append(f"  [{ts}] звонок: «{text[:500]}»")
+        elif src == "openline":
+            who = "МЕНЕДЖЕР" if direction == "out" else "КЛИЕНТ"
+            lines.append(f"  [{ts}] {who}: «{text[:400]}»")
+        elif src == "comment":
+            lines.append(f"  [{ts}] коммент менеджера: «{text[:300]}»")
+        elif src == "email":
+            sub = c.get("subject") or "письмо"
+            lines.append(f"  [{ts}] EMAIL «{sub}»: «{text[:200]}»")
+        else:
+            lines.append(f"  [{ts}] {src}: «{text[:200]}»")
+    out = "\n".join(lines)
+    return out[:char_cap]
+
+
 # ---------- финальный LLM-проход — текст отчёта --------------------------
+
+_SYSTEM_PROMPT_DETAILED = """Ты — старший аналитик отдела продаж Growzone.
+Тебе дают данные:
+  1) воронка по 3 менеджерам (Шеян, Ребров, Останина)
+  2) топ горящих сделок (триггеры) с суммами под риском
+  3) ДЛЯ КАЖДОЙ топ-сделки — выписку из переписки и расшифровок звонков
+     (хронологически, старое → свежее)
+
+Сформируй JSON-ответ строго в этом формате:
+{
+  "short_summary_html": "<b>...</b> ≤1800 символов, Telegram-HTML, для chat-сообщения",
+  "detailed_html_body": "...без обёртки <html>, только содержимое <body>, до 30000 символов"
+}
+
+ВАЖНОЕ О ТЕРМИНОЛОГИИ:
+— У Growzone «продажа», «выручка», «закрытая сделка» = сделка перешла
+   на стадию «Договор заключён, внесён аванс» (STAGE_ID=PREPARATION).
+   В воронке поле «выиграно» — это уже коммерческие продажи.
+— НЕ ПИШИ «отдел не закрыл ни одной сделки» если в данных won>0.
+
+═══ short_summary_html ═══
+Краткая сводка для Telegram, ≤1800 символов:
+  • Главная цифра выручки и под угрозой (1-2 строки)
+  • Топ-3 самых горящих сделок одной строкой каждая: #ID, клиент,
+    сумма, менеджер, действие в одну фразу
+  • Внизу: 📎 «Подробный разбор каждой сделки — во вложенном файле»
+Только теги <b>, <i>. Без <br/>, <p>, <div>.
+
+═══ detailed_html_body ═══
+Развёрнутый HTML-разбор для отдельной страницы:
+
+<h1>📊 Утренний разбор продаж — {{date}}</h1>
+
+<section>
+  <h2>1. Главное</h2>
+  Цифры выручки за период, под угрозой, динамика.
+</section>
+
+<section>
+  <h2>2. Топ сделок, где нужно дожимать</h2>
+  Для каждой топ-сделки (5-10 шт) — отдельный блок:
+
+  <article class="deal">
+    <h3>🔥 #18524 — Руслан, Бурцево МСК — ₽3 727 164</h3>
+    <p class="manager">Менеджер: Ребров Никита · Категория: client_ready_to_pay</p>
+
+    <h4>📋 Что произошло (по переписке и звонкам):</h4>
+    <ul>
+      <li><time>21.05 14:30</time> Клиент в WhatsApp: <q>Готовы заключаться, давайте счёт</q></li>
+      <li><time>22.05 11:00</time> Звонок Реброва (4 мин): обсудили техзадание, договорились что счёт «завтра»</li>
+      <li><time>23.05</time> — счёт не выставлен, тишина</li>
+    </ul>
+
+    <h4>🎯 Что сказать менеджеру:</h4>
+    <ol>
+      <li>Позвонить Руслану ПРЯМО СЕЙЧАС</li>
+      <li>Извиниться за задержку</li>
+      <li>Уточнить реквизиты (ИП или ООО?)</li>
+      <li>Сказать: «Счёт за 30 минут, аванс ₽1.5M ждём в среду»</li>
+    </ol>
+
+    <p class="risk">⚠️ Под угрозой: <b>₽3.7M</b>. Если до пятницы не закроем — клиент уйдёт к конкуренту.</p>
+  </article>
+
+  (повторить для остальных топ-сделок)
+</section>
+
+<section>
+  <h2>3. Воронка по менеджерам</h2>
+  Для каждого: сколько сделок, продано, проиграно, конверсия,
+  гипотеза где проседает (со ссылкой на конкретные сделки если из
+  триггеров видно).
+</section>
+
+<section>
+  <h2>4. Рекомендации на сегодня</h2>
+  3-5 конкретных действий для РОПа.
+</section>
+
+ВАЖНО:
+— ID сделок ВСЕГДА оформляй как <a href="#{{ID}}">#NNNNN</a> — потом
+   их превратят в кликабельные ссылки на Bitrix.
+— Цитируй реальный текст из переписки! Если в данных есть «оплачу
+   завтра» — так и пиши, в кавычках.
+— Если для какой-то топ-сделки нет коммуникаций — пиши «Нет данных
+   из переписки, рекомендую открыть карточку и посмотреть лично».
+— Не используй <br/>, <div>, <span class>. Только семантические
+   теги: h1-h4, p, ul/ol/li, q, blockquote, time, b, i, a, section,
+   article.
+— Russian. Длина detailed_html_body ≤30000 символов.
+"""
 
 _SYSTEM_PROMPT = """Ты — старший аналитик отдела продаж компании Growzone.
 Тебе дают сырые цифры и факты по работе 3 менеджеров (Шеян Андрей,
@@ -256,6 +402,155 @@ async def _call_deepseek_digest(context: str) -> str:
         return f"⚠️ Не удалось получить ответ от DeepSeek: {e}"
 
 
+async def _call_deepseek_detailed(context: str) -> Dict[str, str]:
+    """Подробный JSON-ответ DeepSeek для HTML-разбора:
+       {short_summary_html, detailed_html_body}.
+    Если что-то не так — возвращаем dict с error-ключом, наверху
+    fallback на старый _call_deepseek_digest.
+    """
+    if not settings.deepseek_api_key:
+        return {"error": "DeepSeek API не настроен"}
+    body = {
+        "model": settings.deepseek_model,
+        "messages": [
+            {"role": "system", "content": _SYSTEM_PROMPT_DETAILED},
+            {"role": "user", "content": "Данные по отделу продаж за период:\n\n" + context[:80_000]},
+        ],
+        "response_format": {"type": "json_object"},
+        "thinking": {"type": "disabled"},
+        "temperature": 0.2,
+        "max_tokens": 8000,
+    }
+    url = settings.deepseek_base_url.rstrip("/") + "/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {settings.deepseek_api_key}",
+        "Content-Type": "application/json",
+    }
+    try:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=360)) as s:
+            async with s.post(url, json=body, headers=headers) as resp:
+                text = await resp.text()
+                if resp.status != 200:
+                    logger.error("Detailed digest LLM error", status=resp.status, body=text[:300])
+                    return {"error": f"DeepSeek {resp.status}: {text[:200]}"}
+                data = json.loads(text)
+        content = data["choices"][0]["message"]["content"].strip()
+        parsed = json.loads(content)
+        if not isinstance(parsed, dict):
+            return {"error": "DeepSeek вернул не объект"}
+        return {
+            "short": str(parsed.get("short_summary_html") or "").strip(),
+            "detailed": str(parsed.get("detailed_html_body") or "").strip(),
+        }
+    except Exception as e:
+        logger.error("Detailed digest LLM failed", error=str(e))
+        return {"error": str(e)}
+
+
+# ---------- HTML-обёртка для аттача ---------------------------------------
+
+_PORTAL_URL_FALLBACK = "https://growzone.bitrix24.ru"
+_DEAL_ID_RE = re.compile(r"#(\d{4,6})")
+
+
+def _linkify_deal_ids(html: str, portal_url: str) -> str:
+    """Превратить #18524 в <a href="...">#18524</a> — кликабельные ссылки
+    на карточки сделок в Bitrix24. Не трогает уже завёрнутые в <a> ID."""
+    if not html:
+        return ""
+    portal = (portal_url or _PORTAL_URL_FALLBACK).rstrip("/")
+
+    def _replace(m: re.Match) -> str:
+        # Если уже есть href рядом — не трогаем (грубо проверяем по контексту).
+        # Полностью обернуть в <a> простым regex'ом — нормально, дубликат
+        # <a><a>#…</a></a> не появится потому что Re не идёт по уже-замене.
+        did = m.group(1)
+        return f'<a href="{portal}/crm/deal/details/{did}/">#{did}</a>'
+
+    return _DEAL_ID_RE.sub(_replace, html)
+
+
+_HTML_TEMPLATE = """<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Утренний разбор продаж — {date}</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root {{
+    --primary: #1a8754;
+    --danger: #c92a2a;
+    --warn: #b88300;
+    --bg: #f8f9fb;
+    --card: #fff;
+    --line: #e6e8eb;
+    --text: #1a1d21;
+    --muted: #5a6470;
+  }}
+  body {{
+    margin: 0;
+    padding: 16px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 16px;
+    line-height: 1.55;
+    -webkit-text-size-adjust: 100%;
+  }}
+  .container {{ max-width: 760px; margin: 0 auto; }}
+  h1 {{ font-size: 26px; margin: 8px 0 4px; }}
+  .meta {{ color: var(--muted); font-size: 14px; margin-bottom: 24px; }}
+  section {{
+    background: var(--card); border: 1px solid var(--line);
+    border-radius: 12px; padding: 18px 22px; margin: 14px 0;
+  }}
+  section h2 {{ font-size: 20px; margin: 0 0 12px; }}
+  article.deal {{
+    border-left: 4px solid var(--danger); padding-left: 16px;
+    margin: 22px 0;
+  }}
+  article.deal h3 {{ font-size: 18px; margin: 0 0 4px; }}
+  article.deal .manager {{ color: var(--muted); font-size: 14px; margin: 0 0 12px; }}
+  article.deal h4 {{ font-size: 15px; margin: 14px 0 6px; color: var(--muted); }}
+  article.deal q {{
+    background: #fff4e5; padding: 1px 6px; border-radius: 4px;
+    font-style: italic; color: #5a3500;
+  }}
+  article.deal time {{ color: var(--muted); font-weight: 500; margin-right: 6px; }}
+  article.deal .risk {{
+    background: #fff4f4; border-left: 3px solid var(--danger);
+    padding: 8px 12px; margin: 12px 0 0; border-radius: 0 6px 6px 0;
+  }}
+  ul, ol {{ padding-left: 22px; margin: 6px 0; }}
+  li {{ margin: 4px 0; }}
+  a {{ color: #0066d6; text-decoration: none; border-bottom: 1px solid #cfe0f5; }}
+  a:hover {{ border-color: #0066d6; }}
+  .footer {{
+    margin: 32px 0 8px; color: var(--muted); font-size: 13px;
+    text-align: center;
+  }}
+</style>
+</head>
+<body>
+<div class="container">
+{body}
+<div class="footer">Сгенерировано ботом «Гроу» · {date} {time}</div>
+</div>
+</body>
+</html>
+"""
+
+
+def render_html_page(detailed_body: str, *, date: str, portal_url: str = "") -> str:
+    """Обернуть detailed_html_body из DeepSeek в полноценную HTML-страницу
+    с CSS, linkify ID сделок."""
+    from datetime import datetime as _dt
+    body_html = _linkify_deal_ids(detailed_body, portal_url)
+    return _HTML_TEMPLATE.format(
+        date=date, time=_dt.now().strftime("%H:%M"), body=body_html,
+    )
+
+
 # ---------- публичная точка входа -----------------------------------------
 
 async def build_growth_digest(
@@ -298,18 +593,49 @@ async def build_growth_digest(
         users_map = await client.get_users_map()
         user_names = {uid: info.get("name", str(uid)) for uid, info in users_map.items()}
 
-        # Контекст для DeepSeek — компактный текст, не JSON (LLM лучше
-        # читает структурированный текст для нарратива).
+        # Расширенный контекст: для топ-сделок добавляем выписки из
+        # переписки (DeepSeek сможет цитировать «оплачу завтра» и т.п.).
+        comms_by_deal = await _fetch_comms_for_top(missed, per_deal=8)
+        signals_block = _format_signals_block(missed, deal_titles, user_names)
+        comms_block_lines = ["", "ВЫПИСКИ ИЗ ПЕРЕПИСКИ ПО ТОП-СДЕЛКАМ:"]
+        for did, comms in comms_by_deal.items():
+            title = deal_titles.get(did, "")[:50]
+            comms_text = _format_comms_for_signal(did, comms)
+            if not comms_text:
+                comms_text = "  (нет коммуникаций в БД — посмотреть карточку вручную)"
+            comms_block_lines.append(f"\nСделка #{did} «{title}»:\n{comms_text}")
+        comms_block = "\n".join(comms_block_lines)
+
         context = (
             _format_funnel_block(funnel)
             + "\n\n"
-            + _format_signals_block(missed, deal_titles, user_names)
+            + signals_block
+            + "\n\n"
+            + comms_block
         )
 
-        narrative = await _call_deepseek_digest(context)
+        # Пробуем сначала детальный JSON-режим (для HTML-аттача).
+        # Fallback на старый одношаговый narrative если что-то пойдёт не так.
+        detailed = await _call_deepseek_detailed(context)
+        short_text: str = ""
+        html_body: str = ""
+        if "error" in detailed:
+            logger.warning("Detailed digest failed, falling back to single-text",
+                           error=detailed["error"])
+            narrative = await _call_deepseek_digest(context)
+            short_text = narrative
+        else:
+            short_text = detailed.get("short", "")
+            html_body = detailed.get("detailed", "")
 
         return {
-            "text": narrative,
+            "text": short_text,
+            "html_body": html_body,
+            "html_page": (
+                render_html_page(html_body, date=date.today().isoformat(),
+                                 portal_url=settings.b24_portal_url)
+                if html_body else ""
+            ),
             "total_at_risk_rub": missed["total_at_risk_rub"],
             "signals_count": missed["total_signals"],
             "deals_in_funnel": funnel["team_total"]["total_deals"],

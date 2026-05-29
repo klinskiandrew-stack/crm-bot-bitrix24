@@ -285,6 +285,9 @@ async def send_manager_daily(bot: Bot) -> None:
 
     try:
         from growth_intel.digest import build_growth_digest
+        from aiogram.types import BufferedInputFile
+        from datetime import date as _date
+        from pathlib import Path
         # Ежедневный инкремент: проходим только сделки с активностью за
         # последние 48 часов (запас). Обычно 15-30 сделок вместо 100,
         # отчёт собирается за 1-2 минуты вместо 6-7. Старые сделки уже
@@ -296,12 +299,43 @@ async def send_manager_daily(bot: Bot) -> None:
             refresh_since_hours=48,
         )
         growth_text = result.get("text") or ""
-        if not growth_text:
-            logger.warning("Growth-intel returned empty text — skip")
+        html_page = result.get("html_page") or ""
+        if not growth_text and not html_page:
+            logger.warning("Growth-intel returned empty — skip")
             return
-        await _send_html_chunked(bot, chat_id, growth_text)
+
+        # 1) Краткое сообщение в чат
+        if growth_text:
+            await _send_html_chunked(bot, chat_id, growth_text)
+
+        # 2) HTML-аттач с подробностями (если есть)
+        if html_page:
+            today_iso = _date.today().isoformat()
+            filename = f"growzone-utro-{today_iso}.html"
+            # Архив на сервере
+            try:
+                archive_dir = Path("/opt/crm-bot/data/reports")
+                archive_dir.mkdir(parents=True, exist_ok=True)
+                (archive_dir / filename).write_text(html_page, encoding="utf-8")
+            except Exception as e:
+                logger.warning("Could not save report archive", error=str(e))
+
+            try:
+                doc = BufferedInputFile(html_page.encode("utf-8"), filename=filename)
+                await bot.send_document(
+                    chat_id, doc,
+                    caption=(
+                        "📎 Подробный разбор каждой топ-сделки: "
+                        "цитаты из переписки, что сказать менеджеру, риск"
+                    ),
+                )
+            except Exception as e:
+                logger.error("HTML attachment send failed", error=str(e))
+
         logger.info("Growth-intel block sent",
-                    chat_id=chat_id, chars=len(growth_text),
+                    chat_id=chat_id,
+                    short_chars=len(growth_text),
+                    html_chars=len(html_page),
                     at_risk=result.get("total_at_risk_rub"),
                     signals=result.get("signals_count"))
     except Exception as e:
