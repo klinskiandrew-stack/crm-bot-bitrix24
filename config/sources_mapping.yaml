@@ -48,6 +48,13 @@ SEO:
     utm_source_in: ["yandex"]
   description: "Платная реклама Яндекс.Директ. SOURCE_ID=WEB + UTM_SOURCE=yandex (или UTM_MEDIUM=cpc). Если SOURCE_ID=WEB БЕЗ UTM — это редкость, считай как Веб-сайт без атрибуции."
 
+Avito ads:
+  bitrix_source_ids:
+    - "WEB"                # Веб-сайт + utm_source=avito_ads = платная реклама Avito ads
+  utm_rules:
+    utm_source_in: ["avito_ads"]
+  description: "Платная реклама Avito ads. SOURCE_ID=WEB + UTM_SOURCE=avito_ads. Отделяется от канала «Авито» (тот — органика через объявления Avito, открытая линия и звонки)."
+
 ВКонтакте:
   bitrix_source_ids:
     - "6"
