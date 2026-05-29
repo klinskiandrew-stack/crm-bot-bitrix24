@@ -580,6 +580,9 @@
     <label>Форма
       <select id="filter-webform"><option value="">— все —</option></select>
     </label>
+    <label>Source (UF)
+      <select id="filter-custom-source"><option value="">— все —</option></select>
+    </label>
 
     <label>utm_source
       <select id="filter-utm-source"><option value="">— все —</option></select>
@@ -616,6 +619,7 @@
             <th data-sort="rejection_reason">Причина отказа</th>
             <th data-sort="channel_label">Канал</th>
             <th data-sort="source_name">Источник</th>
+            <th data-sort="custom_source">Source (UF)</th>
             <th data-sort="webform_name">Форма</th>
             <th data-sort="manager">Менеджер</th>
             <th data-sort="utm_source">utm_source</th>
@@ -1010,6 +1014,7 @@ function rebuildFilterOptions() {
   const allDeals = state.data.deals;
   const sets = {
     status: new Set(), manager: new Set(), webform: new Set(),
+    customSource: new Set(),
     utmSource: new Set(), utmMedium: new Set(), utmCampaign: new Set(),
     utmContent: new Set(), utmTerm: new Set(),
   };
@@ -1017,6 +1022,7 @@ function rebuildFilterOptions() {
     if (r.status_name) sets.status.add(r.status_name);
     if (r.manager) sets.manager.add(r.manager);
     if (r.webform_name) sets.webform.add(r.webform_name);
+    if (r.custom_source) sets.customSource.add(r.custom_source);
     if (r.utm_source) sets.utmSource.add(r.utm_source);
     if (r.utm_medium) sets.utmMedium.add(r.utm_medium);
     if (r.utm_campaign) sets.utmCampaign.add(r.utm_campaign);
@@ -1035,6 +1041,7 @@ function rebuildFilterOptions() {
   fillFilterOptions('filter-status', [...sets.status].sort());
   fillFilterOptions('filter-manager', [...sets.manager].sort());
   fillFilterOptions('filter-webform', [...sets.webform].sort());
+  fillFilterOptions('filter-custom-source', [...sets.customSource].sort());
   fillFilterOptions('filter-utm-source', [...sets.utmSource].sort());
   fillFilterOptions('filter-utm-medium', [...sets.utmMedium].sort());
   fillFilterOptions('filter-utm-campaign', [...sets.utmCampaign].sort());
@@ -1051,6 +1058,7 @@ function passesFilters(row, isLead, opts) {
     status: document.getElementById('filter-status').value,
     manager: document.getElementById('filter-manager').value,
     webform: document.getElementById('filter-webform').value,
+    customSource: document.getElementById('filter-custom-source').value,
     channel: document.getElementById('filter-channel').value,
     period: document.getElementById('filter-period').value,
     dateFrom: document.getElementById('filter-date-from').value,
@@ -1069,6 +1077,7 @@ function passesFilters(row, isLead, opts) {
   }
   if (f.manager && row.manager !== f.manager) return false;
   if (f.webform && row.webform_name !== f.webform) return false;
+  if (f.customSource && row.custom_source !== f.customSource) return false;
   if (f.utmSource && row.utm_source !== f.utmSource) return false;
   if (f.utmMedium && row.utm_medium !== f.utmMedium) return false;
   if (f.utmCampaign && row.utm_campaign !== f.utmCampaign) return false;
@@ -1079,7 +1088,7 @@ function passesFilters(row, isLead, opts) {
     const bag = [
       row.title, row.name, row.manager,
       row.utm_source, row.utm_medium, row.utm_campaign, row.utm_content, row.utm_term,
-      row.source_description, row.source_name, row.webform_name,
+      row.source_description, row.source_name, row.webform_name, row.custom_source,
       row.rejection_reason, row.rejection_reason_detail, row.card_comment,
     ].filter(Boolean).join(' ').toLowerCase();
     if (!bag.includes(f.search)) return false;
@@ -1239,7 +1248,7 @@ function renderTimelineList(items) {
 function renderLeads(leads) {
   const tbody = document.getElementById('leads-body');
   if (!leads.length) {
-    tbody.innerHTML = '<tr><td colspan="14" class="empty">Лидов по фильтру нет</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="15" class="empty">Лидов по фильтру нет</td></tr>';
     return;
   }
   tbody.innerHTML = leads.map(l => `
@@ -1250,6 +1259,7 @@ function renderLeads(leads) {
       <td>${renderReasonCell(l)}</td>
       <td>${l.channel_label ? `<span class="channel-chip">${escapeHtml(l.channel_label)}</span>` : '<span class="muted">—</span>'}</td>
       <td>${renderSourceCell(l)}</td>
+      <td>${l.custom_source ? `<span class="channel-chip" style="background:#fef3c7;color:#78350f;border-color:#fde68a">${escapeHtml(l.custom_source)}</span>` : '<span class="muted">—</span>'}</td>
       <td>${l.webform_name ? escapeHtml(l.webform_name) : '<span class="muted">—</span>'}</td>
       <td>${escapeHtml(l.manager || '—')}</td>
       <td>${renderUtmCell(l.utm_source)}</td>
@@ -1338,7 +1348,7 @@ document.querySelectorAll('.tab').forEach(t => {
 });
 
 [
-  'filter-search','filter-status','filter-manager','filter-webform','filter-channel',
+  'filter-search','filter-status','filter-manager','filter-webform','filter-custom-source','filter-channel',
   'filter-period','filter-date-from','filter-date-to',
   'filter-utm-source','filter-utm-medium','filter-utm-campaign','filter-utm-content','filter-utm-term',
 ].forEach(id => {
@@ -1370,7 +1380,7 @@ document.querySelectorAll('input[name="period-mode"]').forEach(r => {
 }
 
 document.getElementById('reset-filters').addEventListener('click', () => {
-  ['filter-search','filter-status','filter-manager','filter-webform','filter-channel',
+  ['filter-search','filter-status','filter-manager','filter-webform','filter-custom-source','filter-channel',
    'filter-utm-source','filter-utm-medium','filter-utm-campaign','filter-utm-content','filter-utm-term',
    'filter-date-from','filter-date-to'].forEach(id => document.getElementById(id).value = '');
   document.getElementById('filter-period').value = '30';

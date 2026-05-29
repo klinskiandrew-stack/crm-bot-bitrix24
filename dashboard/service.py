@@ -46,6 +46,9 @@ PREFETCH_COMMENTS_FOR_LATEST = 30
 # для этого Bitrix-портала.
 REJECTION_REASON_UF = "UF_CRM_1740994523382"
 REJECTION_REASON_DETAIL_UF = "UF_CRM_1723465843"
+# Кастомное поле "source" (string) — пользователь добавил для своей
+# атрибуции трафика. Дашборд просто пробрасывает в UI как колонку.
+CUSTOM_SOURCE_UF = "UF_CRM_1779993536"
 
 # Основная воронка ("Автополивы Сделки") = category_id 0.
 DEAL_CATEGORY = 0
@@ -534,6 +537,7 @@ class DashboardService:
             "utm_term": lead.get("UTM_TERM") or "",
             "rejection_reason": self._resolve_rejection(lead.get(REJECTION_REASON_UF)),
             "rejection_reason_detail": str(lead.get(REJECTION_REASON_DETAIL_UF) or ""),
+            "custom_source": str(lead.get(CUSTOM_SOURCE_UF) or ""),
             "is_qualified": status_id == LEAD_STATUS_QUALIFIED,
             # card_comment обрезаем до 800 симв. — UI показывает превью с
             # «развернуть», полный текст в карточке Bitrix.
