@@ -351,15 +351,17 @@ def start_report_scheduler(bot: Bot) -> Optional[AsyncIOScheduler]:
                 id="sales_comms_transcribe",
                 misfire_grace_time=180,
             )
-        # Часовая сводка прогресса в личку админа (sales_comms + growth_intel).
-        # На :45, чтобы данные после sync (:17) и нескольких Whisper-проходов
-        # уже были свежие. Молчит если за час ничего не изменилось.
+        # Ежедневная сводка прогресса в личку админа (sales_comms +
+        # growth_intel). Раньше шла каждый час на :45 — теперь раз в день
+        # в 09:05 МСК (через 5 мин после утреннего РОП-отчёта), потому
+        # что бэкфилл Whisper'а в основном пройден и часовые апдейты
+        # стали избыточны. Молчит если за сутки ничего не изменилось.
         scheduler.add_job(
             _run_sales_comms_progress_notify,
-            CronTrigger(minute=45, timezone=tz),
+            CronTrigger(hour=9, minute=5, timezone=tz),
             args=[bot],
             id="sales_comms_progress_notify",
-            misfire_grace_time=600,
+            misfire_grace_time=3600,
         )
 
     # ⚠️ Прежний еженедельный growth_intel_digest (понедельник 09:15)
