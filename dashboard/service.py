@@ -66,7 +66,7 @@ LEAD_STATUS_QUALIFIED = "CONVERTED"
 CHANNEL_DEFS: List[Tuple[str, str, str, Optional[str]]] = [
     ("vk",            "ВКонтакте", "ВКонтакте", None),
     ("avito",         "Авито",     "Авито",     None),
-    ("avito_ads",     "Avito ads", "Avito ads", "avito_ads"),
+    ("avito_ads",     "Avito ads", "Avito ads", "avito-ads"),
     ("yandex",        "Яндекс",    "Яндекс",    "yandex"),
     ("interception",  "Перехват",  "Перехват",  None),
 ]
