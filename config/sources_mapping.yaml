@@ -50,10 +50,10 @@ SEO:
 
 Avito ads:
   bitrix_source_ids:
-    - "WEB"                # Веб-сайт + utm_source=avito_ads = платная реклама Avito ads
+    - "WEB"                # Веб-сайт + utm_source=avito-ads = платная реклама Avito ads
   utm_rules:
-    utm_source_in: ["avito_ads"]
-  description: "Платная реклама Avito ads. SOURCE_ID=WEB + UTM_SOURCE=avito_ads. Отделяется от канала «Авито» (тот — органика через объявления Avito, открытая линия и звонки)."
+    utm_source_in: ["avito-ads"]
+  description: "Платная реклама Avito ads. SOURCE_ID=WEB + UTM_SOURCE=avito-ads. Отделяется от канала «Авито» (тот — органика через объявления Avito, открытая линия и звонки)."
 
 ВКонтакте:
   bitrix_source_ids:
