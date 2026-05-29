@@ -28,14 +28,48 @@ logger = structlog.get_logger()
 
 # ---------- запуск анализатора триггеров по живым сделкам ----------------
 
-async def refresh_signals(client: Bitrix24Client, *, limit: int = 100) -> Dict[str, Any]:
-    """Прогнать triggers.analyze_deal по топ-N активным сделкам.
+async def _deals_with_recent_activity(since_hours: int) -> set:
+    """ID-шники сделок, по которым были коммуникации за последние N часов.
+    Источник — локальная deal_communications (наполняется часовым sync).
+    Сильно сокращает кандидатов для DeepSeek-анализа в ежедневном
+    отчёте: обычно 15-30 сделок вместо 100."""
+    from db.connection import db
+    rows = await db.fetch_all(
+        f"""
+        SELECT DISTINCT deal_id
+        FROM deal_communications
+        WHERE occurred_at >= datetime('now', '-{int(since_hours)} hours')
+        """,
+    )
+    return {int(r["deal_id"]) for r in rows or [] if r.get("deal_id")}
 
-    Аккуратно: DeepSeek-вызов на каждую сделку (~3-5 сек). 100 сделок =
-    ~7 минут. Поэтому запускаем еженедельно cron'ом, не каждый час.
+
+async def refresh_signals(
+    client: Bitrix24Client,
+    *,
+    limit: int = 100,
+    since_hours: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Прогнать triggers.analyze_deal по живым сделкам.
+
+    since_hours=None — полный прогон по всем активным (≈100 сделок,
+    ~6 мин DeepSeek, ₽4/прогон). Подходит для ручного бэкфилла или
+    еженедельного глубокого сканирования.
+
+    since_hours=24/48 — инкремент: берём только сделки с новой
+    активностью за последние N часов (обычно 15-30 в сутки). Сделки
+    без движения уже разобраны прошлым прогоном — повторно гонять их
+    бесполезно. Время и стоимость падают в 4-5 раз без потери качества.
     """
     deals = await iter_active_deals(client, max_items=limit)
-    users_map = await client.get_users_map()
+
+    if since_hours is not None and since_hours > 0:
+        active_ids = await _deals_with_recent_activity(since_hours)
+        deals = [d for d in deals if int(d.get("ID") or 0) in active_ids]
+        logger.info(
+            "refresh_signals incremental mode",
+            since_hours=since_hours, candidates=len(deals),
+        )
 
     total_added = 0
     total_satisfied = 0
@@ -218,20 +252,28 @@ async def build_growth_digest(
     period_days: int = 30,
     skip_refresh: bool = False,
     refresh_limit: int = 60,
+    refresh_since_hours: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Собрать отчёт «где растут деньги, где теряются».
 
-    skip_refresh=True — НЕ запускать analyze_deal перед сборкой (читать
-    то что уже есть в growth_signals). Используется при on-demand
-    вызовах из бота, чтобы не ждать 5-7 минут DeepSeek-проходов.
+    skip_refresh=True — не запускать analyze_deal перед сборкой
+    (читать то что есть в growth_signals). Для on-demand вызовов из
+    бота, чтобы не ждать 5-7 минут DeepSeek-проходов.
+
+    refresh_since_hours=24 — инкрементальный режим: проходим только по
+    сделкам с активностью за сутки. Используется ежедневным cron'ом —
+    в 4-5 раз быстрее и дешевле полного скана.
     """
     own_client = client is None
     if own_client:
         client = Bitrix24Client()
     try:
         if not skip_refresh:
-            logger.info("Growth digest: refreshing signals", limit=refresh_limit)
-            refresh = await refresh_signals(client, limit=refresh_limit)
+            logger.info("Growth digest: refreshing signals",
+                        limit=refresh_limit, since_hours=refresh_since_hours)
+            refresh = await refresh_signals(
+                client, limit=refresh_limit, since_hours=refresh_since_hours,
+            )
             logger.info("Growth digest: signals refreshed", **refresh)
 
         funnel = await build_funnel(

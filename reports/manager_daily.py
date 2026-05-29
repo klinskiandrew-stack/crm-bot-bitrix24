@@ -244,7 +244,16 @@ async def send_manager_daily(bot: Bot) -> None:
 
     try:
         from growth_intel.digest import build_growth_digest
-        result = await build_growth_digest(period_days=30, skip_refresh=False)
+        # Ежедневный инкремент: проходим только сделки с активностью за
+        # последние 48 часов (запас). Обычно 15-30 сделок вместо 100,
+        # отчёт собирается за 1-2 минуты вместо 6-7. Старые сделки уже
+        # разобраны прошлыми прогонами — горящие триггеры по ним
+        # остались в growth_signals и попадут в digest.
+        result = await build_growth_digest(
+            period_days=30,
+            skip_refresh=False,
+            refresh_since_hours=48,
+        )
         growth_text = result.get("text") or ""
         if not growth_text:
             logger.warning("Growth-intel returned empty text — skip")
