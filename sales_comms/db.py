@@ -245,3 +245,205 @@ async def stats() -> Dict[str, int]:
         "transcription_pending": pending_row["n"] if pending_row else 0,
         "deals_tracked": deals_row["n"] if deals_row else 0,
     }
+
+
+# ============================================================
+# Lv3: расширенный синк — контакты / файлы / счета / стадии.
+# ============================================================
+
+# ---------- contacts ----------
+
+async def upsert_contacts(deal_id: int, contacts: List[Dict[str, Any]]) -> int:
+    """Полная замена контактов сделки. Возвращает число вставленных.
+    Принимаем dict с ключами: id, name, phone, email, position, company, is_primary."""
+    if not contacts:
+        return 0
+    await db.execute("DELETE FROM deal_contacts WHERE deal_id = ?", (deal_id,))
+    added = 0
+    for c in contacts:
+        try:
+            cid = int(c.get("id") or 0)
+        except (TypeError, ValueError):
+            continue
+        if cid <= 0:
+            continue
+        await db.execute(
+            """
+            INSERT OR REPLACE INTO deal_contacts
+            (deal_id, contact_id, name, phone, email, position, company, is_primary, synced_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            """,
+            (
+                deal_id, cid,
+                c.get("name") or None,
+                c.get("phone") or None,
+                c.get("email") or None,
+                c.get("position") or None,
+                c.get("company") or None,
+                1 if c.get("is_primary") else 0,
+            ),
+        )
+        added += 1
+    await db.commit()
+    return added
+
+
+async def contacts_for_deal(deal_id: int) -> List[Dict[str, Any]]:
+    rows = await db.fetch_all(
+        "SELECT contact_id, name, phone, email, position, company, is_primary "
+        "FROM deal_contacts WHERE deal_id = ? ORDER BY is_primary DESC, contact_id",
+        (deal_id,),
+    )
+    return [dict(r) for r in rows or []]
+
+
+# ---------- files ----------
+
+async def upsert_files(deal_id: int, files: List[Dict[str, Any]]) -> int:
+    """Insert OR IGNORE by (deal_id, file_id). Возвращает число новых."""
+    if not files:
+        return 0
+    added = 0
+    for f in files:
+        fid = str(f.get("file_id") or "").strip()
+        name = f.get("name") or ""
+        if not fid or not name:
+            continue
+        cur = await db.execute(
+            """
+            INSERT OR IGNORE INTO deal_files
+            (deal_id, file_id, name, size_bytes, mime_type, uploaded_at,
+             uploaded_by, activity_id, download_url)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                deal_id, fid, name,
+                f.get("size_bytes"),
+                f.get("mime_type"),
+                f.get("uploaded_at"),
+                f.get("uploaded_by"),
+                f.get("activity_id"),
+                f.get("download_url"),
+            ),
+        )
+        if cur.rowcount and cur.rowcount > 0:
+            added += 1
+    await db.commit()
+    return added
+
+
+async def files_for_deal(deal_id: int, limit: int = 20) -> List[Dict[str, Any]]:
+    rows = await db.fetch_all(
+        "SELECT file_id, name, size_bytes, mime_type, uploaded_at, uploaded_by, activity_id "
+        "FROM deal_files WHERE deal_id = ? ORDER BY uploaded_at DESC LIMIT ?",
+        (deal_id, limit),
+    )
+    return [dict(r) for r in rows or []]
+
+
+# ---------- invoices ----------
+
+async def upsert_invoices(deal_id: int, invoices: List[Dict[str, Any]]) -> int:
+    if not invoices:
+        return 0
+    added = 0
+    for inv in invoices:
+        try:
+            iid = int(inv.get("invoice_id") or 0)
+        except (TypeError, ValueError):
+            continue
+        if iid <= 0:
+            continue
+        cur = await db.execute(
+            """
+            INSERT OR REPLACE INTO deal_invoices
+            (deal_id, invoice_id, invoice_number, amount_rub, currency,
+             status_id, status_name, created_at_b24, paid_at, due_at, synced_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            """,
+            (
+                deal_id, iid,
+                inv.get("invoice_number"),
+                inv.get("amount_rub"),
+                inv.get("currency") or "RUB",
+                inv.get("status_id"),
+                inv.get("status_name"),
+                inv.get("created_at_b24"),
+                inv.get("paid_at"),
+                inv.get("due_at"),
+            ),
+        )
+        if cur.rowcount and cur.rowcount > 0:
+            added += 1
+    await db.commit()
+    return added
+
+
+async def invoices_for_deal(deal_id: int) -> List[Dict[str, Any]]:
+    rows = await db.fetch_all(
+        "SELECT invoice_id, invoice_number, amount_rub, status_id, status_name, "
+        "created_at_b24, paid_at, due_at "
+        "FROM deal_invoices WHERE deal_id = ? ORDER BY created_at_b24 DESC",
+        (deal_id,),
+    )
+    return [dict(r) for r in rows or []]
+
+
+# ---------- stage history ----------
+
+async def upsert_stage_history(deal_id: int, items: List[Dict[str, Any]]) -> int:
+    """items: [{stage_id, stage_name, entered_at, exited_at, duration_days}, ...]
+    Insert OR REPLACE по уникальному ключу (deal_id, stage_id, entered_at)."""
+    if not items:
+        return 0
+    # Полная замена цепочки стадий — нам важно чтобы текущая
+    # (exited_at=NULL) была единственной. Поэтому удаляем существующее
+    # и вставляем заново.
+    await db.execute("DELETE FROM deal_stage_history WHERE deal_id = ?", (deal_id,))
+    added = 0
+    for it in items:
+        sid = it.get("stage_id")
+        ent = it.get("entered_at")
+        if not sid or not ent:
+            continue
+        await db.execute(
+            """
+            INSERT OR REPLACE INTO deal_stage_history
+            (deal_id, stage_id, stage_name, entered_at, exited_at, duration_days, synced_at)
+            VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            """,
+            (
+                deal_id, sid,
+                it.get("stage_name"),
+                ent,
+                it.get("exited_at"),
+                it.get("duration_days"),
+            ),
+        )
+        added += 1
+    await db.commit()
+    return added
+
+
+async def stage_history_for_deal(deal_id: int) -> List[Dict[str, Any]]:
+    rows = await db.fetch_all(
+        "SELECT stage_id, stage_name, entered_at, exited_at, duration_days "
+        "FROM deal_stage_history WHERE deal_id = ? ORDER BY entered_at ASC",
+        (deal_id,),
+    )
+    return [dict(r) for r in rows or []]
+
+
+# ---------- composite full context (для digest) -----------------------------
+
+async def full_deal_context(deal_id: int) -> Dict[str, Any]:
+    """Одним вызовом — всё что нужно digest'у по сделке.
+    Возвращает {comms, contacts, files, invoices, stages, sync_state}."""
+    return {
+        "comms": await communications_for_deal(deal_id, max_items=20),
+        "contacts": await contacts_for_deal(deal_id),
+        "files": await files_for_deal(deal_id, limit=12),
+        "invoices": await invoices_for_deal(deal_id),
+        "stages": await stage_history_for_deal(deal_id),
+        "sync_state": await get_sync_state(deal_id),
+    }

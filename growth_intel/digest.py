@@ -193,6 +193,80 @@ async def _fetch_comms_for_top(missed: Dict[str, Any], per_deal: int = 8) -> Dic
     return out
 
 
+async def _fetch_extras_for_top(missed: Dict[str, Any]) -> Dict[int, Dict[str, Any]]:
+    """Lv3: контакт + стадии + счета + файлы для каждой топ-сделки.
+    Эти данные DeepSeek использует в шапке каждой топ-сделки чтобы
+    дать РОПу полную картину «кто клиент, на какой стадии, какие счета»."""
+    from sales_comms.db import (
+        contacts_for_deal, stage_history_for_deal,
+        invoices_for_deal, files_for_deal,
+    )
+    deal_ids = sorted({int(s["deal_id"]) for s in missed.get("top_signals", [])})
+    out: Dict[int, Dict[str, Any]] = {}
+    for did in deal_ids[:12]:
+        try:
+            out[did] = {
+                "contacts": await contacts_for_deal(did),
+                "stages": await stage_history_for_deal(did),
+                "invoices": await invoices_for_deal(did),
+                "files": await files_for_deal(did, limit=8),
+            }
+        except Exception as e:
+            logger.warning("fetch extras for deal failed", deal_id=did, error=str(e))
+    return out
+
+
+def _format_extras_for_deal(extras: Dict[str, Any]) -> str:
+    """Сжатый текст-блок с шапкой сделки для DeepSeek.
+    Контакт + текущая стадия + сколько висит + счета + ключевые файлы."""
+    if not extras:
+        return ""
+    lines = []
+    # контакт
+    contacts = extras.get("contacts") or []
+    if contacts:
+        primary = next((c for c in contacts if c.get("is_primary")), contacts[0])
+        parts = [primary.get("name") or "?"]
+        if primary.get("phone"):
+            parts.append(primary["phone"])
+        if primary.get("email"):
+            parts.append(primary["email"])
+        if primary.get("position"):
+            parts.append(primary["position"])
+        lines.append("  Контакт: " + " · ".join(parts))
+        if len(contacts) > 1:
+            lines.append(f"  (всего контактов: {len(contacts)})")
+    # стадии: путь + текущая со сроком
+    stages = extras.get("stages") or []
+    if stages:
+        # путь stage_name → stage_name → ...
+        chain = " → ".join((s.get("stage_name") or s.get("stage_id"))[:25] for s in stages[-5:])
+        current = stages[-1]
+        days = current.get("duration_days")
+        cur_name = current.get("stage_name") or current.get("stage_id")
+        if days is not None and days > 0:
+            lines.append(f"  Стадии (последние 5): {chain}")
+            lines.append(f"  Текущая: «{cur_name}» — {days} дн.")
+        else:
+            lines.append(f"  Стадии (последние 5): {chain}")
+    # счета
+    invoices = extras.get("invoices") or []
+    if invoices:
+        inv_lines = []
+        for inv in invoices[:3]:
+            amount = int(inv.get("amount_rub") or 0)
+            num = inv.get("invoice_number") or f"#{inv.get('invoice_id')}"
+            status = inv.get("status_name") or inv.get("status_id") or "?"
+            inv_lines.append(f"{num}: ₽{amount:,} ({status})".replace(",", " "))
+        lines.append(f"  Счета: " + "; ".join(inv_lines))
+    # файлы — только последние 3 имени
+    files = extras.get("files") or []
+    if files:
+        names = ", ".join(f.get("name", "файл")[:30] for f in files[:3])
+        lines.append(f"  Файлы (последние): {names}" + (f" (+{len(files)-3})" if len(files) > 3 else ""))
+    return "\n".join(lines)
+
+
 def _format_comms_for_signal(
     deal_id: int,
     comms: List[Dict[str, Any]],
@@ -612,18 +686,26 @@ async def build_growth_digest(
         users_map = await client.get_users_map()
         user_names = {uid: info.get("name", str(uid)) for uid, info in users_map.items()}
 
-        await _p("💬 Подтягиваю выписки из переписок по топ-сделкам…")
-        # Расширенный контекст: для топ-сделок добавляем выписки из
-        # переписки (DeepSeek сможет цитировать «оплачу завтра» и т.п.).
+        await _p("💬 Подтягиваю выписки + контакты, стадии, счета по топ-сделкам…")
+        # Расширенный контекст:
+        #   - выписки переписки (для цитат «оплачу завтра»)
+        #   - Lv3: контакт клиента, путь по воронке, дни в текущей стадии,
+        #     статусы счетов, ключевые файлы
         comms_by_deal = await _fetch_comms_for_top(missed, per_deal=8)
+        extras_by_deal = await _fetch_extras_for_top(missed)
         signals_block = _format_signals_block(missed, deal_titles, user_names)
-        comms_block_lines = ["", "ВЫПИСКИ ИЗ ПЕРЕПИСКИ ПО ТОП-СДЕЛКАМ:"]
+        comms_block_lines = ["", "КОНТЕКСТ ПО КАЖДОЙ ТОП-СДЕЛКЕ (контакт, стадии, счета, переписка):"]
         for did, comms in comms_by_deal.items():
             title = deal_titles.get(did, "")[:50]
+            extras_text = _format_extras_for_deal(extras_by_deal.get(did, {}))
             comms_text = _format_comms_for_signal(did, comms)
             if not comms_text:
                 comms_text = "  (нет коммуникаций в БД — посмотреть карточку вручную)"
-            comms_block_lines.append(f"\nСделка #{did} «{title}»:\n{comms_text}")
+            block = f"\nСделка #{did} «{title}»:\n"
+            if extras_text:
+                block += extras_text + "\n  ───\n"
+            block += comms_text
+            comms_block_lines.append(block)
         comms_block = "\n".join(comms_block_lines)
 
         context = (

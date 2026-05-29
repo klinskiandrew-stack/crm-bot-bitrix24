@@ -33,6 +33,7 @@ from sales_comms.db import (
     save_sync_state,
     upsert_many,
 )
+from sales_comms.enrichment import enrich_deal
 from sales_comms.openlines import fetch_session_messages
 
 logger = structlog.get_logger()
@@ -261,10 +262,18 @@ class SyncResult:
     comments_added: int = 0
     activities_added: int = 0
     calls_queued: int = 0
+    contacts_added: int = 0
+    files_added: int = 0
+    invoices_added: int = 0
+    stages_added: int = 0
     error: Optional[str] = None
 
     def total_added(self) -> int:
-        return self.comments_added + self.activities_added
+        return (
+            self.comments_added + self.activities_added
+            + self.contacts_added + self.files_added
+            + self.invoices_added + self.stages_added
+        )
 
 
 async def sync_deal(
@@ -362,7 +371,18 @@ async def sync_deal(
         res.activities_added = added_a + added_ol
         res.calls_queued = calls_pending
 
-        # 4) Фиксируем состояние синка. last_*_id берём как MAX(ID) из того,
+        # 4) Lv3 enrichment: контакты + файлы + счета + история стадий.
+        # Не критично — если упадёт, основной синк уже сохранён в БД.
+        try:
+            enriched = await enrich_deal(client, deal_id, activities=activities)
+            res.contacts_added = enriched.get("contacts", 0)
+            res.files_added = enriched.get("files", 0)
+            res.invoices_added = enriched.get("invoices", 0)
+            res.stages_added = enriched.get("stages", 0)
+        except Exception as e:
+            logger.warning("enrich_deal failed", deal_id=deal_id, error=str(e))
+
+        # 5) Фиксируем состояние синка. last_*_id берём как MAX(ID) из того,
         # что только что увидели (а не вставили) — иначе после backfill'а
         # инкрементный sync будет тянуть весь список заново.
         last_comment_id = max((int(c.get("ID") or 0) for c in (comments or [])), default=None) or None

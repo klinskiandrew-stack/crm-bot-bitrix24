@@ -726,6 +726,73 @@ class Bitrix24Client:
             result = result.get("items", [])
         return {r.get("STAGE_ID") for r in result if isinstance(r, dict) and r.get("STAGE_ID")}
 
+    async def get_deal_stage_history(
+        self,
+        deal_id: int,
+        category_id: int = 0,
+    ) -> List[Dict[str, Any]]:
+        """Полная история стадий ОДНОЙ сделки в хронологическом порядке.
+
+        В отличие от get_stage_history (фильтр по stage + период), здесь
+        ищем все события для конкретного OWNER_ID. Возвращает список
+        [{stage_id, created_time, stage_semantic_id}, ...] от старого
+        к новому. Если crm.stagehistory.list недоступен — возвращает
+        пустой список без падения.
+        """
+        params = {
+            "entityTypeId": 2,
+            "filter": {
+                "=OWNER_ID": deal_id,
+                "=CATEGORY_ID": category_id,
+            },
+            "select": ["ID", "STAGE_ID", "CREATED_TIME", "STAGE_SEMANTIC_ID"],
+            "order": {"CREATED_TIME": "ASC"},
+        }
+        out: List[Dict[str, Any]] = []
+        start = 0
+        for _ in range(20):   # safety: ≤1000 событий
+            resp = await self._call("crm.stagehistory.list", params, start=start)
+            if not isinstance(resp, dict) or "error" in resp:
+                return out
+            items = (resp.get("result") or {}).get("items") or []
+            if not items:
+                break
+            out.extend(items)
+            nxt = resp.get("next")
+            if nxt is None or len(items) < 50:
+                break
+            start = nxt
+        return out
+
+    async def get_deal_invoices(self, deal_id: int) -> List[Dict[str, Any]]:
+        """Счета, привязанные к сделке.
+
+        Bitrix24 имеет два API: legacy crm.invoice.list (старые счета)
+        и crm.item.list для smart-invoices (entityTypeId=31). У Growzone
+        может быть любой — пробуем сначала smart, fallback на legacy.
+        Не падает: при отсутствии прав / отсутствии счетов возвращает [].
+        """
+        # smart-invoice
+        resp = await self._call("crm.item.list", {
+            "entityTypeId": 31,
+            "filter": {"parentId2": deal_id},
+            "select": ["id", "title", "opportunity", "currencyId",
+                       "stageId", "createdTime", "closedate"],
+        })
+        if isinstance(resp, dict) and "result" in resp:
+            items = (resp.get("result") or {}).get("items") or []
+            if items:
+                return items
+        # fallback: legacy invoice (API может быть отключён в новых порталах)
+        resp = await self._call("crm.invoice.list", {
+            "filter": {"UF_DEAL_ID": deal_id},
+            "select": ["ID", "ACCOUNT_NUMBER", "PRICE", "CURRENCY",
+                       "STATUS_ID", "DATE_INSERT", "DATE_PAYED", "PAY_VOUCHER_DATE"],
+        })
+        if isinstance(resp, dict) and "result" in resp:
+            return resp.get("result") or []
+        return []
+
     async def get_stage_history(
         self,
         stage_id: str,

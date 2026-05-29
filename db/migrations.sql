@@ -272,3 +272,86 @@ CREATE TABLE IF NOT EXISTS growth_signals (
 CREATE INDEX IF NOT EXISTS idx_gs_unsatisfied ON growth_signals(satisfied, severity, deadline);
 CREATE INDEX IF NOT EXISTS idx_gs_deal        ON growth_signals(deal_id, detected_at DESC);
 CREATE INDEX IF NOT EXISTS idx_gs_manager     ON growth_signals(manager_id, satisfied, detected_at DESC);
+
+-- =========================================================================
+-- sales_comms Lv3: расширенный синк по сделке.
+-- Хранит контакты клиента, прикреплённые файлы, счета и историю стадий,
+-- чтобы deals_status_digest / growth_opportunities могли давать полную
+-- картину «что у нас по сделке» без живых дёрганий Bitrix24 на каждый
+-- запрос РОПа.
+-- =========================================================================
+
+-- Контакты сделки (Bitrix: crm.contact.get по CONTACT_IDS из сделки).
+-- Один контакт может быть привязан к нескольким сделкам — храним связь
+-- как many-to-many через PK (deal_id, contact_id). PHONE/EMAIL храним
+-- через ; если значений несколько.
+CREATE TABLE IF NOT EXISTS deal_contacts (
+    deal_id      INTEGER NOT NULL,
+    contact_id   INTEGER NOT NULL,
+    name         TEXT,            -- ФИО полностью
+    phone        TEXT,            -- основной телефон или несколько через "; "
+    email        TEXT,
+    position     TEXT,            -- должность
+    company      TEXT,            -- название компании (если есть COMPANY_ID)
+    is_primary   INTEGER DEFAULT 0,
+    synced_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (deal_id, contact_id)
+);
+CREATE INDEX IF NOT EXISTS idx_deal_contacts_deal ON deal_contacts(deal_id);
+
+-- Файлы, прикреплённые к таймлайну сделки (КП, договор, скан паспорта).
+-- Источник: FILES в crm.activity, + crm.timeline.bindings.list по сделке.
+-- size_bytes/mime_type помогают LLM понять «pdf-договор 200KB» vs
+-- «фото 4MB». uploaded_by → ID менеджера для понимания «кто загрузил».
+CREATE TABLE IF NOT EXISTS deal_files (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    deal_id      INTEGER NOT NULL,
+    file_id      TEXT NOT NULL,     -- ID файла в Bitrix Disk
+    name         TEXT NOT NULL,
+    size_bytes   INTEGER,
+    mime_type    TEXT,
+    uploaded_at  TIMESTAMP,
+    uploaded_by  INTEGER,           -- Bitrix user_id, если известно
+    activity_id  TEXT,              -- crm.activity.ID если файл прикреплён к активности
+    download_url TEXT,              -- DOWNLOAD_URL от disk.file.get (короткоживущий)
+    synced_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(deal_id, file_id)
+);
+CREATE INDEX IF NOT EXISTS idx_deal_files_deal ON deal_files(deal_id, uploaded_at DESC);
+
+-- Счета (crm.invoice.list или /invoicessmart/ — у Bitrix два разных API,
+-- проверим какой работает у Growzone).
+-- status_id у smart-invoice: 'P' = paid, 'N' = draft, 'D' = overdue.
+CREATE TABLE IF NOT EXISTS deal_invoices (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    deal_id        INTEGER NOT NULL,
+    invoice_id     INTEGER NOT NULL,
+    invoice_number TEXT,
+    amount_rub     REAL,
+    currency       TEXT DEFAULT 'RUB',
+    status_id      TEXT,         -- внутренний код Bitrix
+    status_name    TEXT,         -- человекочитаемое (paid / draft / overdue)
+    created_at_b24 TIMESTAMP,
+    paid_at        TIMESTAMP,
+    due_at         TIMESTAMP,
+    synced_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(invoice_id)
+);
+CREATE INDEX IF NOT EXISTS idx_deal_invoices_deal ON deal_invoices(deal_id);
+
+-- История стадий сделки (crm.stagehistory.list, entityTypeId=2).
+-- Для каждой стадии в которой сделка побывала — когда вошла, когда
+-- вышла (или NULL если ещё там), сколько дней висела. Это даёт ответ
+-- на «застряла в КП 18 дней» без живого вычисления.
+CREATE TABLE IF NOT EXISTS deal_stage_history (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    deal_id       INTEGER NOT NULL,
+    stage_id      TEXT NOT NULL,            -- UC_BFLJ2N / PREPARATION / WON ...
+    stage_name    TEXT,                     -- расшифровка («Замер выполнен»)
+    entered_at    TIMESTAMP NOT NULL,
+    exited_at     TIMESTAMP,                -- NULL = текущая стадия
+    duration_days INTEGER,                  -- (exited_at - entered_at) или (now - entered_at)
+    synced_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(deal_id, stage_id, entered_at)
+);
+CREATE INDEX IF NOT EXISTS idx_deal_stage_history_deal ON deal_stage_history(deal_id, entered_at);
