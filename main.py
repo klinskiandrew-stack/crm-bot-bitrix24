@@ -74,34 +74,28 @@ async def main():
     # Disabled unless LEAD_REPORTS_ENABLED=true; failure never blocks the bot.
     lead_listener = await start_lead_reports_listener()
 
-    # Polling-цикл с auto-restart. У aiogram start_polling() при HTTP
-    # timeout / сетевой ошибке просто выходит, и без обёртки бот молчит
-    # часами (как было 29.05 — 3 часа без сообщений). while True +
-    # try/except с back-off позволяет polling'у самостоятельно подняться.
-    polling_attempts = 0
+    # Polling. aiogram start_polling() при HTTP timeout / сетевой ошибке
+    # внутри ловит exception и просто возвращает None — main продолжает
+    # жить, бот молчит часами (как было 29.05 — 3 часа без сообщений).
+    #
+    # Стратегия: ловим CancelledError (graceful shutdown), иначе любой
+    # выход из polling считаем аварийным и завершаем процесс с exit(1).
+    # systemd (Restart=always, RestartSec=10) поднимет нас через 10 сек.
+    # Это надёжнее async-retry потому что освобождает все ресурсы
+    # (aiohttp connections, asyncio tasks) и стартует с чистого листа.
+    import sys
+    graceful_shutdown = False
     try:
-        while True:
-            try:
-                logger.info("Starting bot polling", attempt=polling_attempts + 1)
-                await dp.start_polling(bot)
-                # Чистый выход (например через graceful shutdown) — выходим
-                # из while.
-                logger.info("Polling exited cleanly")
-                break
-            except (asyncio.CancelledError, KeyboardInterrupt):
-                logger.info("Polling cancelled by signal")
-                break
-            except Exception as e:
-                polling_attempts += 1
-                # Экспоненциальный back-off с capи: 5, 10, 20, 30, 30, ...
-                delay = min(5 * (2 ** min(polling_attempts - 1, 3)), 30)
-                logger.error(
-                    "Bot polling crashed, retrying",
-                    error=str(e),
-                    attempt=polling_attempts,
-                    delay=delay,
-                )
-                await asyncio.sleep(delay)
+        logger.info("Starting bot polling")
+        await dp.start_polling(bot)
+        # Если start_polling вышел сам — это аварийный выход (aiogram
+        # ловит сетевые ошибки внутри и возвращает None).
+        logger.error("Bot polling exited unexpectedly — exiting for systemd restart")
+    except (asyncio.CancelledError, KeyboardInterrupt):
+        logger.info("Polling cancelled by signal — graceful shutdown")
+        graceful_shutdown = True
+    except Exception as e:
+        logger.error("Bot polling crashed — exiting for systemd restart", error=str(e))
     finally:
         if scheduler:
             scheduler.shutdown(wait=False)
@@ -113,7 +107,12 @@ async def main():
             await lead_listener.stop()
         await db.close()
         await bot.session.close()
-        logger.info("Bot shutdown")
+        logger.info("Bot shutdown", graceful=graceful_shutdown)
+
+    # ⚠️ Если выход НЕ graceful (signal) — это значит polling упал, надо
+    # вернуть systemd ненулевой код чтобы он сделал restart через 10 сек.
+    if not graceful_shutdown:
+        sys.exit(1)
 
 
 if __name__ == "__main__":
