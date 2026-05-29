@@ -103,6 +103,11 @@ class Settings(BaseSettings):
     # deals_status_digest. Cron-sync включается флагом ниже.
     sales_comms_enabled: bool = True
     sales_comms_sync_minute: int = 17       # запуск каждый час на :17 (не лезет в другие cron'ы)
+    # Whisper-расшифровка звонков — самая RAM-тяжёлая часть (1.2GB на
+    # модель). Можно отключить если сервер делит память с другими
+    # сервисами и упирается в OOM. Сводки/триггеры будут работать на
+    # уже расшифрованных звонках (см. transcription_status='done').
+    sales_comms_transcribe_enabled: bool = True
 
     # growth_intel — еженедельный отчёт «где теряем деньги» с триггерами
     # из переписки. Тяжёлый (DeepSeek по 60 сделкам, ~5-10 мин), поэтому

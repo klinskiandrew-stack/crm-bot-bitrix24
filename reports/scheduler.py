@@ -342,15 +342,15 @@ def start_report_scheduler(bot: Bot) -> Optional[AsyncIOScheduler]:
         # ⚠️ ИСТОРИЯ: пробовали 8 файлов / 2 мин — словили OOM-killer
         # 9 раз подряд (RSS пиком 3GB при сервере 3.8GB + 2GB swap полон).
         # После batch вызываем stt.unload() — модель Whisper (1.2GB)
-        # выгружается, основной бот остаётся ~600MB. Reload в начале
-        # следующего batch стоит ~9 сек. Net: 5 × 30с + 9с reload ≈
-        # 2.5 мин из 4-мин окна, ~75 файлов/час, безопасно по RAM.
-        scheduler.add_job(
-            _run_sales_comms_transcribe,
-            CronTrigger(minute="*/4", timezone=tz),
-            id="sales_comms_transcribe",
-            misfire_grace_time=180,
-        )
+        # выгружается, основной бот остаётся ~600MB.
+        # Можно полностью отключить флагом если сервер делит память.
+        if settings.sales_comms_transcribe_enabled:
+            scheduler.add_job(
+                _run_sales_comms_transcribe,
+                CronTrigger(minute="*/4", timezone=tz),
+                id="sales_comms_transcribe",
+                misfire_grace_time=180,
+            )
         # Часовая сводка прогресса в личку админа (sales_comms + growth_intel).
         # На :45, чтобы данные после sync (:17) и нескольких Whisper-проходов
         # уже были свежие. Молчит если за час ничего не изменилось.
