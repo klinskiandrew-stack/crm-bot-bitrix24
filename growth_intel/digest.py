@@ -254,8 +254,11 @@ _SYSTEM_PROMPT_DETAILED = """Ты — старший аналитик отдел
 ═══ short_summary_html ═══
 Краткая сводка для Telegram, ≤1800 символов:
   • Главная цифра выручки и под угрозой (1-2 строки)
-  • Топ-3 самых горящих сделок одной строкой каждая: #ID, клиент,
-    сумма, менеджер, действие в одну фразу
+  • Топ-3 самых горящих сделок одной строкой каждая. ВАЖНО: в каждой
+    строке ОБЯЗАТЕЛЬНО указывай ID сделки в формате #NNNNN — он будет
+    автоматически превращён в кликабельную ссылку на карточку Bitrix.
+    Формат строки: «<b>№1 #18524 Руслан</b> · ₽3 727 164 · Ребров —
+    клиент готов, счёт не выставлен»
   • Внизу: 📎 «Подробный разбор каждой сделки — во вложенном файле»
 Только теги <b>, <i>. Без <br/>, <p>, <div>.
 
@@ -646,12 +649,18 @@ async def build_growth_digest(
             short_text = detailed.get("short", "")
             html_body = detailed.get("detailed", "")
 
+        # Linkify ID сделок в кратком сообщении тоже — #18524 → ссылка на
+        # карточку Bitrix. Telegram parse_mode=HTML понимает <a href>.
+        portal_url = settings.b24_portal_url
+        if short_text:
+            short_text = _linkify_deal_ids(short_text, portal_url)
+
         return {
             "text": short_text,
             "html_body": html_body,
             "html_page": (
                 render_html_page(html_body, date=date.today().isoformat(),
-                                 portal_url=settings.b24_portal_url)
+                                 portal_url=portal_url)
                 if html_body else ""
             ),
             "total_at_risk_rub": missed["total_at_risk_rub"],
