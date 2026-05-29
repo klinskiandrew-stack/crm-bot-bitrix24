@@ -290,6 +290,33 @@ async def diagnose_command(message: types.Message, user_context: dict = None):
         await placeholder.edit_text(f"Ошибка: {e}")
 
 
+@router.message(Command("morning_now"))
+async def morning_now_command(message: types.Message, user_context: dict = None):
+    """Запустить ежедневный утренний combined-отчёт ВНЕ расписания.
+
+    Использует тот же send_manager_daily который cron вызывает в 09:00:
+    сначала активность за вчера → РОП-чат, потом growth-блок (через
+    DeepSeek по сделкам с активностью за 48ч).
+    """
+    if not is_admin(user_context):
+        await message.answer("Доступ запрещен.")
+        return
+    from reports.manager_daily import send_manager_daily
+    placeholder = await message.answer(
+        "🌅 Запускаю утренний отчёт. Manager-блок придёт сразу, "
+        "growth-блок через 1-2 минуты (DeepSeek работает)…"
+    )
+    try:
+        # bot.send_message внутри send_manager_daily использует тот же
+        # объект Bot который сейчас работает → правильная сессия + прокси.
+        await send_manager_daily(message.bot)
+        await placeholder.edit_text("✅ Утренний отчёт отправлен в РОП-чат")
+        logger.info("Morning-now run", admin_id=user_context["telegram_id"])
+    except Exception as e:
+        logger.error("Morning-now failed", error=str(e))
+        await placeholder.edit_text(f"❌ Ошибка: {e}")
+
+
 @router.message(Command("transcribe_pending"))
 async def transcribe_pending_command(message: types.Message, user_context: dict = None):
     """Transcribe all not-yet-processed lead recordings (backfill)."""
