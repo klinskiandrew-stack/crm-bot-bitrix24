@@ -43,11 +43,21 @@ if [ "$PREV_COMMIT" = "$NEW_COMMIT" ]; then
     exit 0
 fi
 
-# 3. compile-check всех .py (кроме venv)
+# 3. compile-check всех .py (кроме venv/.git).
+# ВАЖНО: `python -m compileall -q` печатает ошибку, но возвращает EXIT=0 —
+# на него полагаться НЕЛЬЗЯ. Используем compile_dir(quiet=2), который
+# возвращает False при любой синтаксической ошибке → sys.exit(1).
 echo "[$LOG_TAG] compiling all .py ..."
-if ! sudo -u "$SRC_USER" venv/bin/python -m compileall -q \
-        -x 'venv/|\.git/' . 2>&1 | tail -20; then
-    echo "[$LOG_TAG] COMPILE FAILED — rolling back to $PREV_COMMIT, NO restart"
+COMPILE_OUT=$(sudo -u "$SRC_USER" venv/bin/python -c "
+import compileall, re, sys
+ok = compileall.compile_dir('.', quiet=2, rx=re.compile(r'venv|\.git'), maxlevels=5)
+sys.exit(0 if ok else 1)
+" 2>&1)
+COMPILE_RC=$?
+if [ "$COMPILE_RC" != "0" ]; then
+    echo "[$LOG_TAG] COMPILE FAILED:"
+    echo "$COMPILE_OUT" | tail -15
+    echo "[$LOG_TAG] rolling back to $PREV_COMMIT, NO restart (prod untouched)"
     sudo -u "$SRC_USER" git reset --hard "$PREV_COMMIT"
     echo "[$LOG_TAG] rolled back. Prod still on old working code."
     exit 1
