@@ -113,27 +113,39 @@ async def main():
     # Это надёжнее async-retry потому что освобождает все ресурсы
     # (aiohttp connections, asyncio tasks) и стартует с чистого листа.
     import sys
+    import os
     graceful_shutdown = False
     try:
         logger.info("Starting bot polling")
         await dp.start_polling(bot)
         # Если start_polling вышел сам — это аварийный выход (aiogram
         # ловит сетевые ошибки внутри и возвращает None).
-        logger.error("Bot polling exited unexpectedly — exiting for systemd restart")
+        logger.error("Bot polling exited unexpectedly — hard restart via systemd")
     except (asyncio.CancelledError, KeyboardInterrupt):
         logger.info("Polling cancelled by signal — graceful shutdown")
         graceful_shutdown = True
     except Exception as e:
-        logger.error("Bot polling crashed — exiting for systemd restart", error=str(e))
-    finally:
+        logger.error("Bot polling crashed — hard restart via systemd", error=str(e))
+
+    # ⚠️ АВАРИЙНЫЙ ВЫХОД: НЕ делаем async-cleanup. История 29.05:
+    # finally-блок зависал на `await stop_dashboard_server` / Telethon
+    # stop / bot.session.close() при мёртвой сети — процесс становился
+    # зомби (жив, но polling мёртв), systemd его не рестартил.
+    # os._exit(1) убивает процесс НЕМЕДЛЕННО, без finally и без
+    # зависающих await. systemd (Restart=always, RestartSec=10) поднимет
+    # чистый процесс через 10 секунд.
+    if not graceful_shutdown:
+        logger.error("Forcing os._exit(1) for clean systemd restart")
+        os._exit(1)
+
+    # Graceful shutdown (Ctrl+C / SIGTERM) — спокойно освобождаем ресурсы.
+    try:
         if scheduler:
             scheduler.shutdown(wait=False)
         if meetings_scheduler:
             meetings_scheduler.shutdown(wait=False)
         if dashboard_runner and dashboard_scheduler:
             await stop_dashboard_server(dashboard_runner, dashboard_scheduler)
-        # Telethon listener запущен в фоновой задаче — берём его из
-        # holder если он успел подняться. Если не успел — отменяем задачу.
         lead_listener_task.cancel()
         listener_obj = _lead_listener_holder.get("obj")
         if listener_obj:
@@ -143,12 +155,9 @@ async def main():
                 logger.warning("Lead listener stop failed", error=str(e))
         await db.close()
         await bot.session.close()
-        logger.info("Bot shutdown", graceful=graceful_shutdown)
-
-    # ⚠️ Если выход НЕ graceful (signal) — это значит polling упал, надо
-    # вернуть systemd ненулевой код чтобы он сделал restart через 10 сек.
-    if not graceful_shutdown:
-        sys.exit(1)
+    except Exception as e:
+        logger.warning("Graceful shutdown error", error=str(e))
+    logger.info("Bot shutdown", graceful=graceful_shutdown)
 
 
 if __name__ == "__main__":
