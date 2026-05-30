@@ -145,6 +145,22 @@ def _build_call_comm(deal_id: int, a: Dict[str, Any], users_map: Dict[int, Dict[
     elif raw_dir in (2, "2"):
         direction = "out"
 
+    # Оценка исхода звонка. В Bitrix НЕТ явного «дозвонился/нет» для
+    # звонков с мобильного. Но есть косвенные признаки:
+    #   - есть запись (FILES) → разговор СОСТОЯЛСЯ (записывают только
+    #     соединённые звонки) → outcome="answered"
+    #   - нет записи + нулевая/отсутствующая длительность → скорее всего
+    #     НЕДОЗВОН → outcome="likely_no_answer"
+    #   - нет записи но есть длительность >20 сек → разговор был, просто
+    #     без записи (мобильный) → outcome="answered_no_rec"
+    has_record = bool(audio_url)
+    if has_record:
+        outcome = "answered"
+    elif duration and duration >= 20:
+        outcome = "answered_no_rec"
+    else:
+        outcome = "likely_no_answer"
+
     return Communication(
         deal_id=deal_id,
         source_type="call",
@@ -162,6 +178,7 @@ def _build_call_comm(deal_id: int, a: Dict[str, Any], users_map: Dict[int, Dict[
             "provider": a.get("PROVIDER_ID"),
             "status": a.get("STATUS"),
             "files_count": len(files) if isinstance(files, list) else 0,
+            "call_outcome": outcome,
         },
     )
 

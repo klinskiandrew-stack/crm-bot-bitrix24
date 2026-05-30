@@ -132,7 +132,7 @@ async def communications_for_deal(deal_id: int, max_items: int = 40) -> List[Dic
     rows = await db.fetch_all(
         """
         SELECT id, source_type, direction, author_name, occurred_at,
-               subject, text, duration_sec, transcription_status
+               subject, text, duration_sec, transcription_status, raw_meta
         FROM deal_communications
         WHERE deal_id = ?
         ORDER BY occurred_at DESC
@@ -140,7 +140,21 @@ async def communications_for_deal(deal_id: int, max_items: int = 40) -> List[Dic
         """,
         (deal_id, max_items),
     )
-    return [dict(r) for r in rows or []]
+    out = []
+    for r in rows or []:
+        d = dict(r)
+        # Разворачиваем raw_meta JSON в dict, чтобы digest мог читать
+        # call_outcome / completed / status без повторного парсинга.
+        raw = d.get("raw_meta")
+        if raw:
+            try:
+                d["meta"] = json.loads(raw)
+            except (json.JSONDecodeError, TypeError):
+                d["meta"] = {}
+        else:
+            d["meta"] = {}
+        out.append(d)
+    return out
 
 
 async def communications_for_deals(deal_ids: Iterable[int], per_deal: int = 15) -> Dict[int, List[Dict[str, Any]]]:
