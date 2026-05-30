@@ -11,6 +11,7 @@ from meetings.scheduler import start_meetings_scheduler
 from dashboard.app import start_dashboard_server, stop_dashboard_server
 from lead_reports.listener import start_lead_reports_listener
 import os
+import sys
 import structlog
 
 # Configure logging
@@ -112,8 +113,6 @@ async def main():
     # systemd (Restart=always, RestartSec=10) поднимет нас через 10 сек.
     # Это надёжнее async-retry потому что освобождает все ресурсы
     # (aiohttp connections, asyncio tasks) и стартует с чистого листа.
-    import sys
-    import os
     graceful_shutdown = False
     try:
         logger.info("Starting bot polling")
