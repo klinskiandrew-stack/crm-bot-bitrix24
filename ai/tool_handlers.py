@@ -1479,6 +1479,11 @@ class ToolHandlers:
             }
             for c in comments
         ]
+        # Активности (звонки + задачи) с исходом — чтобы бот понимал
+        # «дозвонился/нет» и видел невыполненные задачи «Связаться».
+        enriched["activities"] = await self._lead_deal_activities(
+            client, int(lead_id), owner_type_id=1,
+        )
         return {"lead": enriched}
 
     async def get_deal_full(self, params: Dict[str, Any], user_context: Dict[str, Any]) -> Dict[str, Any]:
@@ -1509,7 +1514,70 @@ class ToolHandlers:
             }
             for c in comments
         ]
+        enriched["activities"] = await self._lead_deal_activities(
+            client, int(deal_id), owner_type_id=2,
+        )
         return {"deal": enriched}
+
+    async def _lead_deal_activities(self, client, owner_id: int, owner_type_id: int):
+        """Активности карточки (звонки/задачи) с исходом — для get_lead_full /
+        get_deal_full. Возвращает компактный список с пометками:
+          - звонок: дозвонился/недозвон (по наличию записи + длительности)
+          - задача: выполнена/НЕ выполнена (COMPLETED)
+        Чтобы бот не выдумывал «менеджер связался» когда был только недозвон."""
+        resp = await client._call("crm.activity.list", {
+            "filter": {"OWNER_ID": owner_id, "OWNER_TYPE_ID": owner_type_id},
+            "select": ["ID", "TYPE_ID", "SUBJECT", "DIRECTION", "STATUS",
+                       "COMPLETED", "PROVIDER_ID", "FILES",
+                       "CREATED", "START_TIME", "END_TIME"],
+            "order": {"ID": "DESC"},
+        })
+        acts = (resp or {}).get("result") or []
+        out = []
+        for a in acts[:15]:
+            tid = _safe_int(a.get("TYPE_ID"))
+            created = a.get("START_TIME") or a.get("CREATED")
+            if tid == 2:  # звонок
+                files = a.get("FILES")
+                has_rec = isinstance(files, list) and len(files) > 0
+                # длительность
+                dur = 0
+                try:
+                    from datetime import datetime as _d
+                    s, e = a.get("START_TIME"), a.get("END_TIME")
+                    if s and e:
+                        ds = _d.fromisoformat(s); de = _d.fromisoformat(e)
+                        dur = max(0, int((de - ds).total_seconds()))
+                except Exception:
+                    pass
+                if has_rec:
+                    outcome = "разговор состоялся (есть запись)"
+                elif dur >= 20:
+                    outcome = "разговор был (без записи)"
+                else:
+                    outcome = "ВЕРОЯТНО НЕ ДОЗВОНИЛСЯ (нет записи, ~0 сек)"
+                direction = "исходящий" if a.get("DIRECTION") in (2, "2") else "входящий"
+                out.append({
+                    "type": "звонок",
+                    "created": created,
+                    "direction": direction,
+                    "outcome": outcome,
+                })
+            elif tid in (3, 6):  # задача / todo
+                out.append({
+                    "type": "задача",
+                    "created": created,
+                    "subject": a.get("SUBJECT"),
+                    "completed": a.get("COMPLETED") == "Y",
+                    "status": "выполнена" if a.get("COMPLETED") == "Y" else "НЕ выполнена",
+                })
+            elif tid == 4:  # письмо
+                out.append({
+                    "type": "письмо",
+                    "created": created,
+                    "subject": a.get("SUBJECT"),
+                })
+        return out
 
     async def analyze_junk_leads(self, params: Dict[str, Any], user_context: Dict[str, Any]) -> Dict[str, Any]:
         """Aggregate JUNK leads for a period and group them by refusal reason.
